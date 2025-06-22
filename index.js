@@ -31,6 +31,10 @@ const commands = [
         .setDescription('Your Roblox UserId')
         .setRequired(true)
     ),
+
+  new SlashCommandBuilder()
+    .setName('debug')
+    .setDescription('🔧 Debug API endpoints'),
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -119,134 +123,202 @@ client.on('interactionCreate', async interaction => {
       await interaction.editReply({ embeds: [embed] });
     }
 
+    if (command === 'debug') {
+      console.log('🔧 Running API debug...');
+      
+      const debugResults = [];
+      
+      // Test 1: Check if API base is reachable
+      try {
+        const healthRes = await fetch(`${API_BASE}/`);
+        debugResults.push(`✅ API Base reachable: ${healthRes.status}`);
+      } catch (err) {
+        debugResults.push(`❌ API Base unreachable: ${err.message}`);
+      }
+      
+      // Test 2: Check available endpoints
+      const testEndpoints = [
+        '/register',
+        '/link', 
+        '/create-user',
+        '/add-user',
+        '/users',
+        '/health',
+        '/status'
+      ];
+      
+      for (const endpoint of testEndpoints) {
+        try {
+          const testRes = await fetch(`${API_BASE}${endpoint}`, {
+            method: 'GET'
+          });
+          debugResults.push(`📡 GET ${endpoint}: ${testRes.status}`);
+        } catch (err) {
+          debugResults.push(`❌ GET ${endpoint}: ${err.message}`);
+        }
+      }
+      
+      // Test 3: Try POST to different endpoints
+      const testData = { discordId: '123', robloxId: '456' };
+      for (const endpoint of ['/register', '/link', '/create-user']) {
+        try {
+          const testRes = await fetch(`${API_BASE}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(testData)
+          });
+          const responseText = await testRes.text();
+          debugResults.push(`📤 POST ${endpoint}: ${testRes.status} - ${responseText.substring(0, 100)}`);
+        } catch (err) {
+          debugResults.push(`❌ POST ${endpoint}: ${err.message}`);
+        }
+      }
+      
+      const embed = new EmbedBuilder()
+        .setColor(0x0099FF)
+        .setTitle('🔧 API Debug Results')
+        .setDescription(`\`\`\`${debugResults.join('\n')}\`\`\``)
+        .setFooter({ text: 'Check console for full details' });
+        
+      console.log('🔧 Debug Results:', debugResults);
+      await interaction.editReply({ embeds: [embed] });
+    }
+
     if (command === 'register') {
       const userId = interaction.options.getString('userid');
       
-      console.log(`📝 Registering Discord ID ${discordId} with Roblox ID ${userId}`);
+      console.log(`📝 Attempting to register Discord ID: ${discordId} with Roblox ID: ${userId}`);
 
-      // First, check if user already exists in the system
-      const checkRes = await fetch(`${API_BASE}/get-balance/${userId}`);
-      const checkText = await checkRes.text();
-      
-      console.log(`🔍 Roblox user check: ${checkRes.status} - ${checkText}`);
-      
-      let userExists = false;
-      let currentBalance = 0;
-      
-      if (checkRes.ok) {
-        // User exists, get their current balance
-        const balData = JSON.parse(checkText);
-        userExists = true;
-        currentBalance = balData.balance || 0;
-        console.log(`✅ User exists with balance: ${currentBalance}`);
-      } else if (checkRes.status === 404) {
-        // User doesn't exist, will be created with 0 balance
-        console.log(`🆕 User doesn't exist, will create with 0 balance`);
-        userExists = false;
-        currentBalance = 0;
-      } else {
-        throw new Error(`Balance check failed: ${checkRes.status} - ${checkText}`);
-      }
-
-      // Try different registration endpoints/methods
-      let registrationSuccess = false;
-      let registrationResponse = null;
-      
-      // Method 1: Try POST /register
+      // Step 1: Check if the user already exists and get balance
+      let existingBalance = null;
       try {
-        const res1 = await fetch(`${API_BASE}/register`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ discordId, robloxId: userId }),
-        });
-        const text1 = await res1.text();
-        console.log(`🔗 Registration Method 1 (POST /register): ${res1.status} - ${text1}`);
-        
-        if (res1.ok) {
-          registrationSuccess = true;
-          registrationResponse = text1;
+        const balanceRes = await fetch(`${API_BASE}/get-balance/${userId}`);
+        if (balanceRes.ok) {
+          const balanceData = JSON.parse(await balanceRes.text());
+          existingBalance = balanceData.balance;
+          console.log(`✅ User exists with balance: ${existingBalance}`);
+        } else {
+          console.log(`ℹ️ User doesn't exist yet (${balanceRes.status})`);
         }
       } catch (err) {
-        console.log(`❌ Registration Method 1 failed: ${err.message}`);
+        console.log(`⚠️ Balance check failed: ${err.message}`);
       }
-      
-      // Method 2: Try PUT /register (if first method failed)
-      if (!registrationSuccess) {
-        try {
-          const res2 = await fetch(`${API_BASE}/register`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ discordId, robloxId: userId }),
-          });
-          const text2 = await res2.text();
-          console.log(`🔗 Registration Method 2 (PUT /register): ${res2.status} - ${text2}`);
-          
-          if (res2.ok) {
-            registrationSuccess = true;
-            registrationResponse = text2;
-          }
-        } catch (err) {
-          console.log(`❌ Registration Method 2 failed: ${err.message}`);
+
+      // Step 2: Try to register/link the user
+      let success = false;
+      let errorDetails = [];
+
+      // Method 1: Standard registration
+      try {
+        console.log('🔄 Trying Method 1: POST /register');
+        const res = await fetch(`${API_BASE}/register`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ 
+            discordId: discordId,
+            robloxId: userId 
+          }),
+        });
+        
+        const responseText = await res.text();
+        console.log(`📡 Method 1 Response: ${res.status} - ${responseText}`);
+        
+        if (res.ok) {
+          success = true;
+          console.log('✅ Registration successful with Method 1');
+        } else {
+          errorDetails.push(`Method 1 (POST /register): ${res.status} - ${responseText}`);
         }
+      } catch (err) {
+        errorDetails.push(`Method 1 Error: ${err.message}`);
+        console.log(`❌ Method 1 failed: ${err.message}`);
       }
-      
-      // Method 3: Try POST /link (if previous methods failed)
-      if (!registrationSuccess) {
+
+      // Method 2: Try different endpoint
+      if (!success) {
         try {
-          const res3 = await fetch(`${API_BASE}/link`, {
+          console.log('🔄 Trying Method 2: POST /link-discord');
+          const res = await fetch(`${API_BASE}/link-discord`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ discordId, robloxId: userId }),
+            headers: { 
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify({ 
+              discordId: discordId,
+              robloxId: userId 
+            }),
           });
-          const text3 = await res3.text();
-          console.log(`🔗 Registration Method 3 (POST /link): ${res3.status} - ${text3}`);
           
-          if (res3.ok) {
-            registrationSuccess = true;
-            registrationResponse = text3;
+          const responseText = await res.text();
+          console.log(`📡 Method 2 Response: ${res.status} - ${responseText}`);
+          
+          if (res.ok) {
+            success = true;
+            console.log('✅ Registration successful with Method 2');
+          } else {
+            errorDetails.push(`Method 2 (POST /link-discord): ${res.status} - ${responseText}`);
           }
         } catch (err) {
-          console.log(`❌ Registration Method 3 failed: ${err.message}`);
-        }
-      }
-      
-      // Method 4: Try with different body format
-      if (!registrationSuccess) {
-        try {
-          const res4 = await fetch(`${API_BASE}/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ discord_id: discordId, roblox_id: userId }),
-          });
-          const text4 = await res4.text();
-          console.log(`🔗 Registration Method 4 (different format): ${res4.status} - ${text4}`);
-          
-          if (res4.ok) {
-            registrationSuccess = true;
-            registrationResponse = text4;
-          }
-        } catch (err) {
-          console.log(`❌ Registration Method 4 failed: ${err.message}`);
+          errorDetails.push(`Method 2 Error: ${err.message}`);
+          console.log(`❌ Method 2 failed: ${err.message}`);
         }
       }
 
-      if (!registrationSuccess) {
+      // Method 3: Try with PUT method
+      if (!success) {
+        try {
+          console.log('🔄 Trying Method 3: PUT /register');
+          const res = await fetch(`${API_BASE}/register`, {
+            method: 'PUT',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify({ 
+              discordId: discordId,
+              robloxId: userId 
+            }),
+          });
+          
+          const responseText = await res.text();
+          console.log(`📡 Method 3 Response: ${res.status} - ${responseText}`);
+          
+          if (res.ok) {
+            success = true;
+            console.log('✅ Registration successful with Method 3');
+          } else {
+            errorDetails.push(`Method 3 (PUT /register): ${res.status} - ${responseText}`);
+          }
+        } catch (err) {
+          errorDetails.push(`Method 3 Error: ${err.message}`);
+          console.log(`❌ Method 3 failed: ${err.message}`);
+        }
+      }
+
+      if (success) {
+        const embed = new EmbedBuilder()
+          .setColor(0x00AAFF)
+          .setTitle('✅ Registration Successful!')
+          .setDescription(`Your Discord account has been linked to Roblox ID: **${userId}**\n\n${existingBalance !== null ? `Current Balance: **${existingBalance}**` : 'Starting Balance: **0**'}\n\nYou can now use \`/bal\` to check your balance!`)
+          .setFooter({ text: 'Registration completed successfully' });
+
+        await interaction.editReply({ embeds: [embed] });
+      } else {
+        console.log('❌ All registration methods failed');
+        console.log('📋 Error details:', errorDetails);
+        
         const embed = new EmbedBuilder()
           .setColor(0xFF0000)
-          .setTitle('❌ Registration failed')
-          .setDescription(`Unable to register with the API. All registration methods failed.\nPlease contact an administrator.\n\nRoblox ID: **${userId}**`)
-          .setFooter({ text: 'Check console logs for detailed error information.' });
-        return await interaction.editReply({ embeds: [embed] });
+          .setTitle('❌ Registration Failed')
+          .setDescription(`Unable to register with any available method.\n\n**Roblox ID:** ${userId}\n**Discord ID:** ${discordId}\n\nUse \`/debug\` to check API status, or contact an administrator.\n\n\`\`\`${errorDetails.slice(0, 3).join('\n')}\`\`\``)
+          .setFooter({ text: 'Check console logs for full details' });
+
+        await interaction.editReply({ embeds: [embed] });
       }
-
-      // Registration successful
-      const embed = new EmbedBuilder()
-        .setColor(0x00AAFF)
-        .setTitle('✅ Roblox ID Linked')
-        .setDescription(`Your Discord is now linked with Roblox ID **${userId}**.\n${userExists ? `Your current balance: **${currentBalance}**` : 'Starting balance: **0**'}\n\nYou can now use \`/bal\`.`)
-        .setFooter({ text: 'You can re-register at any time.' });
-
-      await interaction.editReply({ embeds: [embed] });
     }
 
   } catch (err) {
