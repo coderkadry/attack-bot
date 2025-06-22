@@ -5,7 +5,7 @@ import fetch from 'node-fetch';
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = '1386338165916438538';
 const GUILD_ID = '1380367982986793010';
-const API_URL = 'https://attack-roblox-api-135053415446.europe-west3.run.app/get-balance/';
+const API_BASE = 'https://attack-roblox-api-135053415446.europe-west3.run.app';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
@@ -19,9 +19,16 @@ const commands = [
       option.setName('userid')
         .setDescription('Roblox UserId')
         .setRequired(true)
-    )
-    .toJSON()
-];
+    ),
+  new SlashCommandBuilder()
+    .setName('register')
+    .setDescription('🔗 Register your Roblox account with your Discord')
+    .addStringOption(option =>
+      option.setName('userid')
+        .setDescription('Your Roblox UserId')
+        .setRequired(true)
+    ),
+].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
@@ -46,27 +53,46 @@ client.once('ready', () => {
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.commandName === 'bal') {
-    const userId = interaction.options.getString('userid');
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2500); // 2.5s timeout
+  const userId = interaction.options.getString('userid');
+  const discordId = interaction.user.id;
 
-    try {
-      const response = await fetch(API_URL + userId, { signal: controller.signal });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+
+  try {
+    if (interaction.commandName === 'bal') {
+      const res = await fetch(`${API_BASE}/get-balance/${userId}`, { signal: controller.signal });
       clearTimeout(timeout);
 
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`HTTP ${response.status}: ${text}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      await interaction.reply(`💰 Balance for **${userId}** is: **${data.balance}**`);
+    }
+
+    if (interaction.commandName === 'register') {
+      const res = await fetch(`${API_BASE}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          discordId,
+          robloxId: userId
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
       }
 
-      const data = await response.json();
-      await interaction.reply(`💰 Balance for **${userId}** is: **${data.balance}**`);
-    } catch (err) {
-      clearTimeout(timeout);
-      console.error('Fetch error:', err.message);
-      await interaction.reply(`❌ Failed to fetch balance: ${err.message}`);
+      await interaction.reply(`✅ Linked Roblox ID **${userId}** with your Discord.`);
     }
+  } catch (err) {
+    clearTimeout(timeout);
+    console.error('Command error:', err.message);
+    await interaction.reply(`❌ Error: ${err.message}`);
   }
 });
 
