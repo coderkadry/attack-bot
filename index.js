@@ -11,7 +11,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-// Define commands
+// Slash commands
 const commands = [
   new SlashCommandBuilder()
     .setName('bal')
@@ -23,7 +23,7 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('register')
-    .setDescription('🔗 Register your Roblox account with your Discord')
+    .setDescription('🔗 Link your Roblox ID to Discord')
     .addStringOption(option =>
       option.setName('userid')
         .setDescription('Your Roblox UserId')
@@ -33,80 +33,76 @@ const commands = [
 
 // Register slash commands
 const rest = new REST({ version: '10' }).setToken(TOKEN);
+
 async function registerCommands() {
   try {
     console.log('📦 Registering commands...');
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
-      body: commands,
-    });
-    console.log('✅ Commands registered!');
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      { body: commands }
+    );
+    console.log('✅ Slash commands registered!');
   } catch (err) {
-    console.error('❌ Failed to register commands:', err.message);
+    console.error('❌ Command registration failed:', err.message);
   }
 }
 
-// Handle commands
+// Command handler
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  const command = interaction.commandName;
   const userId = interaction.options.getString('userid');
   const discordId = interaction.user.id;
 
   try {
-    await interaction.deferReply();
+    await interaction.deferReply(); // ⏳ prevent Discord timeout
 
-    if (command === 'bal') {
+    if (interaction.commandName === 'bal') {
       const res = await fetch(`${API_BASE}/get-balance/${userId}`);
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(`API Error ${res.status}: ${JSON.stringify(data)}`);
+        throw new Error(`API ${res.status}: ${JSON.stringify(data)}`);
       }
 
       await interaction.editReply(`💰 Balance for **${userId}** is: **${data.balance}**`);
     }
 
-    else if (command === 'register') {
+    if (interaction.commandName === 'register') {
       const res = await fetch(`${API_BASE}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          discordId,
-          robloxId: userId
-        })
+        body: JSON.stringify({ discordId, robloxId: userId }),
       });
-
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(`API Error ${res.status}: ${JSON.stringify(data)}`);
+        throw new Error(`API ${res.status}: ${JSON.stringify(data)}`);
       }
 
-      await interaction.editReply(`✅ Successfully linked Roblox ID **${userId}** with your Discord.`);
+      await interaction.editReply(`✅ Linked Roblox ID **${userId}** with your Discord.`);
     }
 
   } catch (err) {
-    console.error('❌ Error handling command:', err.message);
-    const errorMsg = `❌ Error: ${err.message || 'Something went wrong.'}`;
+    console.error('❌ Error:', err.message);
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(errorMsg);
+      await interaction.editReply(`❌ Error: ${err.message}`);
     } else {
-      await interaction.reply(errorMsg);
+      await interaction.reply(`❌ Error: ${err.message}`);
     }
   }
 });
 
-// Bot ready
+// On bot ready
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   registerCommands();
 });
 
-// Web server for Cloud Run
+// Express web server for Google Cloud Run
 const web = express();
-web.get('/', (_, res) => res.send('Bot is running ✅'));
-web.listen(8080, () => console.log('🌐 Web server running on port 8080'));
+web.get('/', (_, res) => res.send('🤖 Bot is running!'));
+web.listen(8080, () => console.log('🌐 Web server on port 8080'));
 
-// Start bot
+// Start the bot
 client.login(TOKEN);
