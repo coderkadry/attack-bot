@@ -2,19 +2,24 @@ import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'di
 import express from 'express';
 import fetch from 'node-fetch';
 
+// التوكن من Environment Variable
 const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = 'PUT_YOUR_CLIENT_ID_HERE';
-const GUILD_ID = 'PUT_YOUR_GUILD_ID_HERE';
-const API_URL = 'https://attack-roblox-api-135053415446.europe-west3.run.app/update-balance';
+
+// هات دول من Discord Developer Portal
+const CLIENT_ID = 'اكتب هنا الـ Client ID للبوت';
+const GUILD_ID = 'اكتب هنا الـ Guild ID للسيرفر التجريبي';
+
+const API_URL = 'https://attack-roblox-api-xxxxx-ew.a.run.app/get-balance/';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
+// ✨ تعريف الأمر
 const commands = [
   new SlashCommandBuilder()
     .setName('bal')
-    .setDescription('💰 Get a player\'s Roblox balance')
+    .setDescription('💰 Show balance of a Roblox user')
     .addStringOption(option =>
       option.setName('userid')
         .setDescription('Roblox UserId')
@@ -23,23 +28,25 @@ const commands = [
     .toJSON()
 ];
 
+// ✨ تسجيل الأمر عند تشغيل البوت
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 async function registerCommands() {
   try {
-    console.log('📝 Registering slash command...');
+    console.log('📝 Registering slash commands...');
     await rest.put(
       Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
     );
-    console.log('✅ Slash command registered!');
+    console.log('✅ Slash commands registered!');
   } catch (err) {
-    console.error('❌ Command registration failed:', err);
+    console.error('❌ Failed to register commands:', err);
   }
 }
 
 client.on('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
+  registerCommands(); // <-- يسجّل الأوامر بعد ما البوت يعمل login
 });
 
 client.on('interactionCreate', async interaction => {
@@ -47,10 +54,9 @@ client.on('interactionCreate', async interaction => {
 
   if (interaction.commandName === 'bal') {
     const userId = interaction.options.getString('userid');
-
     try {
       const res = await fetch(API_URL + userId);
-      if (!res.ok) throw new Error('API error or user not found');
+      if (!res.ok) throw new Error('Failed to fetch balance');
       const data = await res.json();
       await interaction.reply(`💰 Balance for **${userId}** is: **${data.balance}**`);
     } catch (err) {
@@ -63,7 +69,5 @@ client.login(TOKEN);
 
 // Web server for Cloud Run
 const web = express();
-web.get('/', (_, res) => res.send('🤖 Discord bot is running!'));
+web.get('/', (_, res) => res.send('🤖 Bot is running!'));
 web.listen(8080, () => console.log('🌐 Web server listening on port 8080'));
-
-registerCommands();
