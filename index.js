@@ -11,7 +11,6 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-// Slash commands
 const commands = [
   new SlashCommandBuilder()
     .setName('bal')
@@ -31,7 +30,6 @@ const commands = [
     ),
 ].map(cmd => cmd.toJSON());
 
-// Register slash commands
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 async function registerCommands() {
@@ -47,37 +45,56 @@ async function registerCommands() {
   }
 }
 
-// Command handler
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
+  const command = interaction.commandName;
   const userId = interaction.options.getString('userid');
   const discordId = interaction.user.id;
 
   try {
-    await interaction.deferReply(); // ⏳ prevent Discord timeout
+    await interaction.deferReply();
 
-    if (interaction.commandName === 'bal') {
+    if (command === 'bal') {
       const res = await fetch(`${API_BASE}/get-balance/${userId}`);
-      const data = await res.json();
+      const text = await res.text();
 
       if (!res.ok) {
-        throw new Error(`API ${res.status}: ${JSON.stringify(data)}`);
+        throw new Error(`API ${res.status}: ${text}`);
+      }
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`Invalid JSON: ${text}`);
+      }
+
+      if (typeof data.balance !== 'number') {
+        throw new Error(`Missing 'balance' field in response: ${text}`);
       }
 
       await interaction.editReply(`💰 Balance for **${userId}** is: **${data.balance}**`);
     }
 
-    if (interaction.commandName === 'register') {
+    if (command === 'register') {
       const res = await fetch(`${API_BASE}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ discordId, robloxId: userId }),
       });
-      const data = await res.json();
+
+      const text = await res.text();
 
       if (!res.ok) {
-        throw new Error(`API ${res.status}: ${JSON.stringify(data)}`);
+        throw new Error(`API ${res.status}: ${text}`);
+      }
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`Invalid JSON: ${text}`);
       }
 
       await interaction.editReply(`✅ Linked Roblox ID **${userId}** with your Discord.`);
@@ -93,16 +110,13 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// On bot ready
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   registerCommands();
 });
 
-// Express web server for Google Cloud Run
 const web = express();
 web.get('/', (_, res) => res.send('🤖 Bot is running!'));
-web.listen(8080, () => console.log('🌐 Web server on port 8080'));
+web.listen(8080, () => console.log('🌐 Web server running on port 8080'));
 
-// Start the bot
 client.login(TOKEN);
