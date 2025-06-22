@@ -2,20 +2,21 @@ import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'di
 import express from 'express';
 import fetch from 'node-fetch';
 
-// التوكن من Environment Variable
+// التوكن من Environment Variable (اتضاف كـ Secret في Google Cloud)
 const TOKEN = process.env.DISCORD_TOKEN;
 
-// هات دول من Discord Developer Portal
-const CLIENT_ID = 'اكتب هنا الـ Client ID للبوت';
-const GUILD_ID = 'اكتب هنا الـ Guild ID للسيرفر التجريبي';
+// ✅ معلومات البوت
+const CLIENT_ID = '1386338165916438538'; // Application (bot) ID
+const GUILD_ID = '1380367982986793010';  // Server ID (guild)
 
-const API_URL = 'https://attack-roblox-api-xxxxx-ew.a.run.app/get-balance/';
+const API_URL = 'https://attack-roblox-api-xxxxx-ew.a.run.app/get-balance/'; // استبدله بالرابط الحقيقي لو اتغير
 
+// إنشاء البوت
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-// ✨ تعريف الأمر
+// ✅ تعريف أمر /bal
 const commands = [
   new SlashCommandBuilder()
     .setName('bal')
@@ -28,7 +29,7 @@ const commands = [
     .toJSON()
 ];
 
-// ✨ تسجيل الأمر عند تشغيل البوت
+// ✅ تسجيل الأمر وقت التشغيل
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 async function registerCommands() {
@@ -44,11 +45,13 @@ async function registerCommands() {
   }
 }
 
-client.on('ready', () => {
+// ✅ عند تشغيل البوت
+client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-  registerCommands(); // <-- يسجّل الأوامر بعد ما البوت يعمل login
+  registerCommands();
 });
 
+// ✅ التعامل مع الأمر /bal
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -65,9 +68,10 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
+// ✅ تشغيل البوت
 client.login(TOKEN);
 
-// Web server for Cloud Run
+// ✅ ويب سيرفر صغير لـ Cloud Run
 const web = express();
 web.get('/', (_, res) => res.send('🤖 Bot is running!'));
-web.listen(8080, () => console.log('🌐 Web server listening on port 8080'));
+web.listen(8080, () => console.log('🌐 Web server running on port 8080'));
