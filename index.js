@@ -2,21 +2,15 @@ import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'di
 import express from 'express';
 import fetch from 'node-fetch';
 
-// التوكن من Environment Variable (اتضاف كـ Secret في Google Cloud)
 const TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = '1386338165916438538';
+const GUILD_ID = '1380367982986793010';
+const API_URL = 'https://attack-roblox-api-135053415446.europe-west3.run.app/get-balance/';
 
-// ✅ معلومات البوت
-const CLIENT_ID = '1386338165916438538'; // Application (bot) ID
-const GUILD_ID = '1380367982986793010';  // Server ID (guild)
-
-const API_URL = 'https://attack-roblox-api-135053415446.europe-west3.run.app/get-balance'; // استبدله بالرابط الحقيقي لو اتغير
-
-// إنشاء البوت
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-// ✅ تعريف أمر /bal
 const commands = [
   new SlashCommandBuilder()
     .setName('bal')
@@ -29,49 +23,55 @@ const commands = [
     .toJSON()
 ];
 
-// ✅ تسجيل الأمر وقت التشغيل
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
 async function registerCommands() {
   try {
-    console.log('📝 Registering slash commands...');
+    console.log('Registering slash commands...');
     await rest.put(
       Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
       { body: commands }
     );
-    console.log('✅ Slash commands registered!');
+    console.log('Slash commands registered!');
   } catch (err) {
-    console.error('❌ Failed to register commands:', err);
+    console.error('Command registration failed:', err);
   }
 }
 
-// ✅ عند تشغيل البوت
 client.once('ready', () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
+  console.log(`Logged in as ${client.user.tag}`);
   registerCommands();
 });
 
-// ✅ التعامل مع الأمر /bal
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'bal') {
     const userId = interaction.options.getString('userid');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500); // 2.5s timeout
+
     try {
-      const res = await fetch(API_URL + userId);
-      if (!res.ok) throw new Error('Failed to fetch balance');
-      const data = await res.json();
+      const response = await fetch(API_URL + userId, { signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status}: ${text}`);
+      }
+
+      const data = await response.json();
       await interaction.reply(`💰 Balance for **${userId}** is: **${data.balance}**`);
     } catch (err) {
-      await interaction.reply('❌ Could not fetch balance.');
+      clearTimeout(timeout);
+      console.error('Fetch error:', err.message);
+      await interaction.reply(`❌ Failed to fetch balance: ${err.message}`);
     }
   }
 });
 
-// ✅ تشغيل البوت
 client.login(TOKEN);
 
-// ✅ ويب سيرفر صغير لـ Cloud Run
 const web = express();
-web.get('/', (_, res) => res.send('🤖 Bot is running!'));
-web.listen(8080, () => console.log('🌐 Web server running on port 8080'));
+web.get('/', (_, res) => res.send('Bot is running'));
+web.listen(8080, () => console.log('Web server running on port 8080'));
