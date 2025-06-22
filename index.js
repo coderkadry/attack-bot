@@ -290,3 +290,4 @@ web.get('/', (_, res) => res.send('🤖 Bot is running!'));
 web.listen(8080, () => console.log('🌐 Web server running on port 8080'));
 
 client.login(TOKEN);
+
