@@ -9,7 +9,7 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = '1386338165916438538'; // Application (bot) ID
 const GUILD_ID = '1380367982986793010';  // Server ID (guild)
 
-const API_URL = 'https://attack-roblox-api-135053415446.europe-west3.run.app/get-balance/'; // استبدله بالرابط الحقيقي لو اتغير
+const API_URL = 'https://attack-roblox-api-135053415446.europe-west3.run.app/get-balance'; // استبدله بالرابط الحقيقي لو اتغير
 
 // إنشاء البوت
 const client = new Client({
