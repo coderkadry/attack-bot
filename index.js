@@ -11,6 +11,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
+// Define commands
 const commands = [
   new SlashCommandBuilder()
     .setName('bal')
@@ -30,74 +31,82 @@ const commands = [
     ),
 ].map(cmd => cmd.toJSON());
 
+// Register slash commands
 const rest = new REST({ version: '10' }).setToken(TOKEN);
-
 async function registerCommands() {
   try {
-    console.log('Registering slash commands...');
-    await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-      { body: commands }
-    );
-    console.log('Slash commands registered!');
+    console.log('📦 Registering commands...');
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
+      body: commands,
+    });
+    console.log('✅ Commands registered!');
   } catch (err) {
-    console.error('Command registration failed:', err);
+    console.error('❌ Failed to register commands:', err.message);
   }
 }
 
-client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  registerCommands();
-});
-
+// Handle commands
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
+  const command = interaction.commandName;
   const userId = interaction.options.getString('userid');
   const discordId = interaction.user.id;
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
-
   try {
-    if (interaction.commandName === 'bal') {
-      const res = await fetch(`${API_BASE}/get-balance/${userId}`, { signal: controller.signal });
-      clearTimeout(timeout);
+    await interaction.deferReply();
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (command === 'bal') {
+      const res = await fetch(`${API_BASE}/get-balance/${userId}`);
       const data = await res.json();
 
-      await interaction.reply(`💰 Balance for **${userId}** is: **${data.balance}**`);
+      if (!res.ok) {
+        throw new Error(`API Error ${res.status}: ${JSON.stringify(data)}`);
+      }
+
+      await interaction.editReply(`💰 Balance for **${userId}** is: **${data.balance}**`);
     }
 
-    if (interaction.commandName === 'register') {
+    else if (command === 'register') {
       const res = await fetch(`${API_BASE}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           discordId,
           robloxId: userId
-        }),
-        signal: controller.signal
+        })
       });
-      clearTimeout(timeout);
+
+      const data = await res.json();
 
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
+        throw new Error(`API Error ${res.status}: ${JSON.stringify(data)}`);
       }
 
-      await interaction.reply(`✅ Linked Roblox ID **${userId}** with your Discord.`);
+      await interaction.editReply(`✅ Successfully linked Roblox ID **${userId}** with your Discord.`);
     }
+
   } catch (err) {
-    clearTimeout(timeout);
-    console.error('Command error:', err.message);
-    await interaction.reply(`❌ Error: ${err.message}`);
+    console.error('❌ Error handling command:', err.message);
+    const errorMsg = `❌ Error: ${err.message || 'Something went wrong.'}`;
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(errorMsg);
+    } else {
+      await interaction.reply(errorMsg);
+    }
   }
 });
 
-client.login(TOKEN);
+// Bot ready
+client.once('ready', () => {
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+  registerCommands();
+});
 
+// Web server for Cloud Run
 const web = express();
-web.get('/', (_, res) => res.send('Bot is running'));
-web.listen(8080, () => console.log('Web server running on port 8080'));
+web.get('/', (_, res) => res.send('Bot is running ✅'));
+web.listen(8080, () => console.log('🌐 Web server running on port 8080'));
+
+// Start bot
+client.login(TOKEN);
