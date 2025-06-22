@@ -62,13 +62,6 @@ client.on('interactionCreate', async interaction => {
       const text = await res.text();
 
       if (!res.ok) {
-        if (res.status === 404) {
-          const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('❌ You are not registered')
-            .setDescription('Use `/register` to link your Roblox UserId first.');
-          return await interaction.editReply({ embeds: [embed] });
-        }
         throw new Error(`API ${res.status}: ${text}`);
       }
 
@@ -79,7 +72,7 @@ client.on('interactionCreate', async interaction => {
         const embed = new EmbedBuilder()
           .setColor(0xFF0000)
           .setTitle('❌ No Roblox ID linked')
-          .setDescription('Please register first using `/register`.');
+          .setDescription('Use `/register` to link your Roblox account first.');
         return await interaction.editReply({ embeds: [embed] });
       }
 
@@ -87,19 +80,12 @@ client.on('interactionCreate', async interaction => {
       const balText = await balRes.text();
 
       if (!balRes.ok) {
-        if (balRes.status === 404) {
-          const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('❌ Roblox user not found')
-            .setDescription('Please re-register with the correct ID.');
-          return await interaction.editReply({ embeds: [embed] });
-        }
         throw new Error(`API ${balRes.status}: ${balText}`);
       }
 
       const balData = JSON.parse(balText);
       if (typeof balData.balance !== 'number') {
-        throw new Error(`Invalid balance response: ${balText}`);
+        throw new Error(`Invalid balance format: ${balText}`);
       }
 
       const embed = new EmbedBuilder()
@@ -123,13 +109,6 @@ client.on('interactionCreate', async interaction => {
       const text = await res.text();
 
       if (!res.ok) {
-        if (res.status === 404) {
-          const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('❌ Roblox user not found')
-            .setDescription('Please check your UserId and try again.');
-          return await interaction.editReply({ embeds: [embed] });
-        }
         throw new Error(`API ${res.status}: ${text}`);
       }
 
