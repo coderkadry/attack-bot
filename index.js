@@ -1,4 +1,11 @@
-import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
+import {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  EmbedBuilder,
+} from 'discord.js';
 import express from 'express';
 import fetch from 'node-fetch';
 
@@ -14,15 +21,11 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder()
     .setName('bal')
-    .setDescription('💰 Show balance of a Roblox user')
-    .addStringOption(option =>
-      option.setName('userid')
-        .setDescription('Roblox UserId')
-        .setRequired(true)
-    ),
+    .setDescription('💰 Show your registered Roblox balance'),
+
   new SlashCommandBuilder()
     .setName('register')
-    .setDescription('🔗 Link your Roblox ID to Discord')
+    .setDescription('🔗 Link or change your Roblox ID')
     .addStringOption(option =>
       option.setName('userid')
         .setDescription('Your Roblox UserId')
@@ -49,35 +52,68 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const command = interaction.commandName;
-  const userId = interaction.options.getString('userid');
   const discordId = interaction.user.id;
 
   try {
     await interaction.deferReply();
 
     if (command === 'bal') {
-      const res = await fetch(`${API_BASE}/get-balance/${userId}`);
+      const res = await fetch(`${API_BASE}/get-link/${discordId}`);
       const text = await res.text();
 
       if (!res.ok) {
+        if (res.status === 404) {
+          const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('❌ You are not registered')
+            .setDescription('Use `/register` to link your Roblox UserId first.');
+          return await interaction.editReply({ embeds: [embed] });
+        }
         throw new Error(`API ${res.status}: ${text}`);
       }
 
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error(`Invalid JSON: ${text}`);
+      const linkData = JSON.parse(text);
+      const robloxId = linkData.robloxId;
+
+      if (!robloxId) {
+        const embed = new EmbedBuilder()
+          .setColor(0xFF0000)
+          .setTitle('❌ No Roblox ID linked')
+          .setDescription('Please register first using `/register`.');
+        return await interaction.editReply({ embeds: [embed] });
       }
 
-      if (typeof data.balance !== 'number') {
-        throw new Error(`Missing 'balance' field in response: ${text}`);
+      const balRes = await fetch(`${API_BASE}/get-balance/${robloxId}`);
+      const balText = await balRes.text();
+
+      if (!balRes.ok) {
+        if (balRes.status === 404) {
+          const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('❌ Roblox user not found')
+            .setDescription('Please re-register with the correct ID.');
+          return await interaction.editReply({ embeds: [embed] });
+        }
+        throw new Error(`API ${balRes.status}: ${balText}`);
       }
 
-      await interaction.editReply(`💰 Balance for **${userId}** is: **${data.balance}**`);
+      const balData = JSON.parse(balText);
+      if (typeof balData.balance !== 'number') {
+        throw new Error(`Invalid balance response: ${balText}`);
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0x00FF99)
+        .setTitle('💰 Your Balance')
+        .setDescription(`Roblox ID: **${robloxId}**\nBalance: **${balData.balance}**`)
+        .setFooter({ text: 'Powered by Attack Roblox' });
+
+      await interaction.editReply({ embeds: [embed] });
     }
 
     if (command === 'register') {
+      const userId = interaction.options.getString('userid');
+
       const res = await fetch(`${API_BASE}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -87,25 +123,38 @@ client.on('interactionCreate', async interaction => {
       const text = await res.text();
 
       if (!res.ok) {
+        if (res.status === 404) {
+          const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('❌ Roblox user not found')
+            .setDescription('Please check your UserId and try again.');
+          return await interaction.editReply({ embeds: [embed] });
+        }
         throw new Error(`API ${res.status}: ${text}`);
       }
 
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error(`Invalid JSON: ${text}`);
-      }
+      const embed = new EmbedBuilder()
+        .setColor(0x00AAFF)
+        .setTitle('✅ Roblox ID Linked')
+        .setDescription(`Your Discord is now linked with Roblox ID **${userId}**.\nYou can now use \`/bal\`.`)
+        .setFooter({ text: 'You can re-register at any time.' });
 
-      await interaction.editReply(`✅ Linked Roblox ID **${userId}** with your Discord.`);
+      await interaction.editReply({ embeds: [embed] });
     }
 
   } catch (err) {
     console.error('❌ Error:', err.message);
+
+    const embed = new EmbedBuilder()
+      .setColor(0xFF0000)
+      .setTitle('❌ An error occurred')
+      .setDescription(`\`\`\`${err.message}\`\`\``)
+      .setFooter({ text: 'Please try again later or contact support.' });
+
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(`❌ Error: ${err.message}`);
+      await interaction.editReply({ embeds: [embed] });
     } else {
-      await interaction.reply(`❌ Error: ${err.message}`);
+      await interaction.reply({ embeds: [embed] });
     }
   }
 });
