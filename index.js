@@ -147,15 +147,16 @@ client.on('interactionCreate', async interaction => {
         debugResults.push(`❌ API Base unreachable: ${err.message}`);
       }
       
-      // Test 2: Check available endpoints
+      // Test 2: Check available endpoints (these are the ones from your original code's debug)
       const testEndpoints = [
-        '/register',
-        '/link', 
-        '/create-user',
-        '/add-user',
+        '/register', // These are likely NOT active or properly implemented on your API
+        '/link',     // These are likely NOT active or properly implemented on your API
+        '/create-user', // These are likely NOT active or properly implemented on your API
+        '/add-user',    // These are likely NOT active or properly implemented on your API
         '/users',
         '/health',
-        '/status'
+        '/status',
+        '/get-balance/123' // Example for get-balance
       ];
       
       for (const endpoint of testEndpoints) {
@@ -169,9 +170,9 @@ client.on('interactionCreate', async interaction => {
         }
       }
       
-      // Test 3: Try POST to different endpoints
+      // Test 3: Try POST to different endpoints (these are the ones from your original code's debug)
       const testData = { discordId: '123', robloxId: '456' };
-      for (const endpoint of ['/register', '/link', '/create-user']) {
+      for (const endpoint of ['/register', '/link', '/create-user', '/add-user']) { // Added '/add-user' here for completeness
         try {
           const testRes = await fetch(`${API_BASE}${endpoint}`, {
             method: 'POST',
@@ -210,37 +211,52 @@ client.on('interactionCreate', async interaction => {
         return await interaction.editReply({ embeds: [embed] });
       }
 
-      // Check if user exists in the balance system (optional check)
-      let userExistsInSystem = false;
-      let currentBalance = 0;
-      
-      try {
-        const balanceRes = await fetch(`${API_BASE}/get-balance/${userId}`);
-        if (balanceRes.ok) {
-          const balanceData = JSON.parse(await balanceRes.text());
-          userExistsInSystem = true;
-          currentBalance = balanceData.balance || 0;
-          console.log(`✅ User exists in balance system with balance: ${currentBalance}`);
-        } else {
-          console.log(`ℹ️ User not in balance system yet (${balanceRes.status})`);
-        }
-      } catch (err) {
-        console.log(`⚠️ Balance check failed: ${err.message}`);
-      }
-
-      // Store the link locally (since API doesn't have registration endpoint)
+      // Store the link locally
       discordLinks[discordId] = userId;
       saveLinks();
       
-      console.log(`✅ Successfully linked Discord ${discordId} to Roblox ${userId}`);
+      console.log(`✅ Successfully linked Discord ${discordId} to Roblox ${userId} locally.`);
+
+      let userExistsInSystem = false;
+      let currentBalance = 0;
+      let apiRegistrationMessage = "";
+
+      // **NEW STEP: Attempt to register/ensure user in API balance system**
+      try {
+        const ensureUserRes = await fetch(`${API_BASE}/ensure-user-balance`, { // <--- Call your new API endpoint
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ robloxId: userId })
+        });
+
+        const ensureUserText = await ensureUserRes.text();
+        console.log(`API ensure-user-balance response: ${ensureUserRes.status} - ${ensureUserText}`);
+
+        if (ensureUserRes.ok) {
+            const ensureUserData = JSON.parse(ensureUserText);
+            userExistsInSystem = true;
+            currentBalance = ensureUserData.balance || 0;
+            apiRegistrationMessage = ensureUserData.message || "User status updated in API.";
+        } else {
+            apiRegistrationMessage = `Failed to update user status in API: ${ensureUserRes.status} - ${ensureUserText.substring(0, 100)}`;
+            console.error(`API ensure-user-balance error: ${apiRegistrationMessage}`);
+        }
+      } catch (err) {
+        apiRegistrationMessage = `Error contacting API for user balance system: ${err.message}`;
+        console.error(`Error contacting API for ensure-user-balance: ${err.message}`);
+      }
 
       const embed = new EmbedBuilder()
         .setColor(0x00AAFF)
         .setTitle('✅ Registration Successful!')
-        .setDescription(`Your Discord account has been linked to Roblox ID: **${userId}**\n\n${userExistsInSystem ? 
-          `🎉 **Current Balance:** ${currentBalance}` : 
-          `⚠️ **Status:** Not in balance system yet\n**Starting Balance:** 0\n\n*Contact an admin to be added to the balance system.*`
-        }\n\nYou can now use \`/bal\` to check your balance!`)
+        .setDescription(
+          `Your Discord account has been linked to Roblox ID: **${userId}**\n\n` +
+          (userExistsInSystem ?
+            `🎉 **Current Balance:** ${currentBalance}\n*${apiRegistrationMessage}*` :
+            `⚠️ **Status:** Not in balance system yet (or initial creation failed)\n**Starting Balance:** 0\n\n*${apiRegistrationMessage}*`
+          ) +
+          `\n\nYou can now use \`/bal\` to check your balance!`
+        )
         .setFooter({ text: 'You can re-register anytime to change your linked ID.' });
 
       await interaction.editReply({ embeds: [embed] });
