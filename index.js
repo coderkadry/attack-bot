@@ -37,11 +37,16 @@ async function initializeFirebaseAdminSDK() {
     // Read the service account key from the specified path
     console.log(`Attempting to read service account key from: ${SERVICE_ACCOUNT_KEY_PATH}`);
     const serviceAccountContent = fs.readFileSync(SERVICE_ACCOUNT_KEY_PATH, 'utf8');
+    console.log('Successfully read service account key file content.');
+
     const serviceAccount = JSON.parse(serviceAccountContent);
+    console.log('Successfully parsed service account key JSON.');
 
     // --- IMPORTANT DEBUGGING STEP ---
     // Log the project_id from the service account key to confirm it's there
-    console.log(`Service Account Project ID found: ${serviceAccount.project_id}`);
+    console.log(`Service Account Project ID found: "${serviceAccount.project_id}"`);
+    console.log(`Service Account client_email: "${serviceAccount.client_email}"`);
+
     if (!serviceAccount.project_id) {
         throw new Error('Project ID is missing from the service account key file. Please ensure you downloaded the correct JSON key.');
     }
@@ -62,6 +67,7 @@ async function initializeFirebaseAdminSDK() {
     console.error(`1. The file "${SERVICE_ACCOUNT_KEY_PATH}" exists on your Google Cloud VM.`);
     console.error(`2. The contents of "${SERVICE_ACCOUNT_KEY_PATH}" are a valid JSON for a Firebase service account key.`);
     console.error(`3. That JSON file contains a field named "project_id".`);
+    console.error(`Full error stack:`, error.stack); // Added full stack trace for more details
     // If it fails, db will remain undefined and authReady will be false.
   }
 }
@@ -512,4 +518,3 @@ client.login(TOKEN).catch(err => {
   console.error('Error:', err.message);
   process.exit(1); // Exit the process if login fails
 });
-
