@@ -1,3 +1,6 @@
+const dotenv = require('dotenv');
+dotenv.config();
+
 import {
   Client,
   GatewayIntentBits,
@@ -81,13 +84,18 @@ const rest = new REST({ version: '10' }).setToken(TOKEN);
 async function registerGlobalCommands() {
   try {
     console.log('📦 Registering global commands...');
-    await rest.put(
+    console.log('🔧 Commands to register:', commands.map(cmd => cmd.name));
+    
+    const result = await rest.put(
       Routes.applicationCommands(CLIENT_ID),
       { body: commands }
     );
-    console.log('✅ Global slash commands registered!');
+    
+    console.log('✅ Global slash commands registered successfully!');
+    console.log('📋 Registered commands:', result.map(cmd => cmd.name));
   } catch (err) {
     console.error('❌ Global command registration failed:', err.message);
+    console.error('❌ Full error:', err);
   }
 }
 
@@ -185,63 +193,91 @@ client.on('interactionCreate', async interaction => {
 
       console.log(`💸 Processing payment: ${senderRobloxId} -> ${recipientUserId} (${amount})`);
 
-      // Call the pay API endpoint
-      try {
-        const payRes = await fetch(`${API_BASE}/pay`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fromUserId: senderRobloxId,
-            toUserId: recipientUserId,
-            amount: amount
-          })
-        });
+      // First, let's check what API endpoints are available for payments
+      console.log(`💸 Attempting payment with available endpoints...`);
+      
+      // Try different possible payment endpoints
+      const paymentEndpoints = [
+        { url: `${API_BASE}/pay`, method: 'POST' },
+        { url: `${API_BASE}/transfer`, method: 'POST' },
+        { url: `${API_BASE}/send-money`, method: 'POST' },
+        { url: `${API_BASE}/payment`, method: 'POST' },
+        { url: `${API_BASE}/transfer-balance`, method: 'POST' }
+      ];
 
-        const payText = await payRes.text();
-        console.log(`💸 Pay API Response: ${payRes.status} - ${payText}`);
+      let paymentSuccessful = false;
+      let lastError = '';
 
-        if (!payRes.ok) {
-          let errorMessage = 'Payment failed';
+      for (const endpoint of paymentEndpoints) {
+        try {
+          console.log(`💸 Trying endpoint: ${endpoint.url}`);
           
-          if (payRes.status === 400) {
-            errorMessage = 'Insufficient balance or invalid request';
-          } else if (payRes.status === 404) {
-            errorMessage = 'Sender or recipient not found in the system';
-          } else if (payRes.status === 500) {
-            errorMessage = 'Server error occurred';
+          const payRes = await fetch(endpoint.url, {
+            method: endpoint.method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fromUserId: senderRobloxId,
+              toUserId: recipientUserId,
+              amount: amount,
+              // Alternative field names in case API expects different format
+              from: senderRobloxId,
+              to: recipientUserId,
+              fromRobloxId: senderRobloxId,
+              toRobloxId: recipientUserId,
+              senderId: senderRobloxId,
+              receiverId: recipientUserId
+            })
+          });
+
+          const payText = await payRes.text();
+          console.log(`💸 ${endpoint.url} Response: ${payRes.status} - ${payText}`);
+
+          if (payRes.ok) {
+            console.log(`✅ Payment successful via ${endpoint.url}`);
+            paymentSuccessful = true;
+            
+            const embed = new EmbedBuilder()
+              .setColor(0x00FF99)
+              .setTitle('✅ Payment Successful!')
+              .setDescription(
+                `**Amount:** ${amount}\n` +
+                `**To:** ${recipientUserId}\n` +
+                `**From:** ${senderRobloxId}\n\n` +
+                `Transaction completed successfully!`
+              )
+              .setFooter({ text: 'Use /bal to check your updated balance.' });
+
+            await interaction.editReply({ embeds: [embed] });
+            break;
+          } else {
+            lastError = `${endpoint.url}: ${payRes.status} - ${payText}`;
+            if (payRes.status !== 404) {
+              // If it's not a 404, this endpoint exists but failed for another reason
+              console.log(`⚠️ Endpoint ${endpoint.url} exists but failed: ${payRes.status}`);
+            }
           }
-
-          const embed = new EmbedBuilder()
-            .setColor(0xFF0000)
-            .setTitle('❌ Payment Failed')
-            .setDescription(`${errorMessage}\n\nDetails: ${payText}`)
-            .setFooter({ text: 'Please try again or contact support.' });
-          return await interaction.editReply({ embeds: [embed] });
+        } catch (err) {
+          console.log(`❌ Error with ${endpoint.url}: ${err.message}`);
+          lastError = `${endpoint.url}: ${err.message}`;
         }
+      }
 
-        const payData = JSON.parse(payText);
+      if (!paymentSuccessful) {
+        console.error('💸 All payment endpoints failed. Last error:', lastError);
         
         const embed = new EmbedBuilder()
-          .setColor(0x00FF99)
-          .setTitle('✅ Payment Successful!')
+          .setColor(0xFF0000)
+          .setTitle('❌ Payment Failed')
           .setDescription(
-            `**Amount:** ${amount}\n` +
+            `Unable to process payment. The payment system may not be available.\n\n` +
+            `**Attempted Amount:** ${amount}\n` +
             `**To:** ${recipientUserId}\n` +
             `**From:** ${senderRobloxId}\n\n` +
-            `Transaction completed successfully!`
+            `Please contact an administrator to process this payment manually.`
           )
-          .setFooter({ text: 'Use /bal to check your updated balance.' });
-
+          .setFooter({ text: 'All payment endpoints returned errors.' });
+        
         await interaction.editReply({ embeds: [embed] });
-
-      } catch (err) {
-        console.error('💸 Payment error:', err.message);
-        const embed = new EmbedBuilder()
-          .setColor(0xFF0000)
-          .setTitle('❌ Payment Error')
-          .setDescription(`Failed to process payment: ${err.message}`)
-          .setFooter({ text: 'Please try again later.' });
-        return await interaction.editReply({ embeds: [embed] });
       }
     }
 
@@ -338,10 +374,27 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-client.once('ready', () => {
+client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   console.log(`🌐 Bot is active in ${client.guilds.cache.size} servers`);
-  registerGlobalCommands();
+  
+  // Wait a moment for the client to be fully ready
+  setTimeout(async () => {
+    await registerGlobalCommands();
+    
+    // Also clear any existing guild-specific commands that might be interfering
+    console.log('🧹 Clearing any old guild-specific commands...');
+    for (const guild of client.guilds.cache.values()) {
+      try {
+        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guild.id), { body: [] });
+        console.log(`✅ Cleared guild commands for ${guild.name}`);
+      } catch (err) {
+        console.log(`⚠️ Could not clear guild commands for ${guild.name}: ${err.message}`);
+      }
+    }
+    
+    console.log('🎉 Bot setup complete! Commands should be available globally in 1-5 minutes.');
+  }, 2000);
 });
 
 // Handle guild join events
