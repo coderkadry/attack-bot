@@ -2,7 +2,7 @@
   "name": "attack-bot",
   "version": "1.0.0",
   "description": "A Roblox-Discord bot.",
-  "type": "module",  <-- ADD THIS LINE!
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
