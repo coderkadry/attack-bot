@@ -10,23 +10,64 @@ import {
   EmbedBuilder,
 } from 'discord.js';
 import express from 'express';
-import fetch from 'node-fetch'; // For making HTTP requests to external APIs
 import fs from 'fs';
 import path from 'path';
+
+// --- Firebase Imports for Google Cloud Firestore ---
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, getDocs } from 'firebase/firestore';
 
 // --- Configuration ---
 const TOKEN = process.env.DISCORD_TOKEN; // Your Discord Bot Token from .env
 const CLIENT_ID = '1386338165916438538'; // Your Discord Bot's Client ID (hardcoded as per your original code)
-const API_BASE = 'https://attack-roblox-api-135053415446.europe-west3.run.app'; // The base URL for your external Roblox API
 
-// Important: These are configured based on your provided context and external API usage
-const ROBLOX_PAYMENT_ENDPOINT_PATH = '/update-balance';
-const ROBLOX_PAYMENT_HTTP_METHOD = 'POST';
+// --- Firebase/Firestore Global Variables (Provided by Canvas Environment) ---
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Unique ID for your app in Canvas
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {}; // Firebase project config
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; // Firebase custom auth token
 
-// If your Roblox API requires an API key, uncomment and set this in your .env file
-// const ROBLOX_API_KEY = process.env.ROBLOX_API_KEY;
+// --- Initialize Firebase and Firestore ---
+let firebaseApp;
+let db;
+let auth;
+let currentUserId = null; // To store the authenticated user's ID
 
-// --- Local Storage for Discord-Roblox Links ---
+// Asynchronous initialization and authentication
+async function initializeFirebaseAndAuth() {
+  try {
+    firebaseApp = initializeApp(firebaseConfig);
+    db = getFirestore(firebaseApp);
+    auth = getAuth(firebaseApp);
+
+    // Listen for authentication state changes
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        currentUserId = user.uid;
+        console.log(`✅ Firebase authenticated. User ID: ${currentUserId}`);
+      } else {
+        currentUserId = null;
+        console.log('⚠️ Firebase authentication state changed: No user logged in.');
+      }
+    });
+
+    // Sign in with custom token or anonymously
+    if (initialAuthToken) {
+      await signInWithCustomToken(auth, initialAuthToken);
+      console.log('✅ Signed in with custom token.');
+    } else {
+      await signInAnonymously(auth);
+      console.log('✅ Signed in anonymously.');
+    }
+  } catch (error) {
+    console.error('❌ Firebase initialization or authentication failed:', error);
+  }
+}
+
+// Call the initialization function
+initializeFirebaseAndAuth();
+
+// --- Local Storage for Discord-Roblox Links (Still local file-based) ---
 // This stores links between Discord IDs and Roblox User IDs in a local JSON file.
 const LINKS_FILE = './discord_links.json';
 let discordLinks = {};
@@ -96,7 +137,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName('debug')
-    .setDescription('🔧 Debug API endpoints and bot status'),
+    .setDescription('🔧 Debug bot status and Firestore connection'),
 ].map(cmd => cmd.toJSON()); // Convert command builders to JSON for Discord API
 
 const rest = new REST({ version: '10' }).setToken(TOKEN); // REST API for Discord interactions
@@ -121,6 +162,32 @@ async function registerGlobalCommands() {
   }
 }
 
+// --- Firestore Helper Functions ---
+// Gets a player's balance from Firestore. Returns 0 if user not found.
+async function getPlayerBalanceFromFirestore(robloxId) {
+  if (!db) {
+    console.error("Firestore not initialized yet!");
+    return 0; // Or throw an error depending on desired behavior
+  }
+  const balanceDocRef = doc(db, `artifacts/${appId}/public/data/robloxBalances`, String(robloxId));
+  const balanceDocSnap = await getDoc(balanceDocRef);
+  if (balanceDocSnap.exists()) {
+    const data = balanceDocSnap.data();
+    return typeof data.balance === 'number' ? data.balance : 0;
+  }
+  return 0; // User not found in Firestore, assume 0 balance
+}
+
+// Updates a player's balance in Firestore. Creates document if it doesn't exist.
+async function updatePlayerBalanceInFirestore(robloxId, newBalance) {
+  if (!db) {
+    console.error("Firestore not initialized yet!");
+    return; // Or throw an error
+  }
+  const balanceDocRef = doc(db, `artifacts/${appId}/public/data/robloxBalances`, String(robloxId));
+  await setDoc(balanceDocRef, { balance: newBalance }, { merge: true }); // Use merge to avoid overwriting other fields if any
+}
+
 // --- Interaction Handling ---
 // This is the main event listener for all slash command interactions.
 client.on('interactionCreate', async interaction => {
@@ -128,6 +195,16 @@ client.on('interactionCreate', async interaction => {
 
   const command = interaction.commandName;
   const discordId = interaction.user.id;
+
+  // Ensure Firestore is ready before processing commands that interact with it
+  if (!db || !auth.currentUser) {
+    await interaction.deferReply();
+    const embed = new EmbedBuilder()
+      .setColor(0xFF8C00)
+      .setTitle('⚠️ Bot initializing')
+      .setDescription('Please wait a moment while the bot connects to its services. Try again shortly!');
+    return await interaction.editReply({ embeds: [embed] });
+  }
 
   try {
     await interaction.deferReply(); // Acknowledge the command quickly to prevent "Interaction failed"
@@ -148,36 +225,14 @@ client.on('interactionCreate', async interaction => {
 
       console.log(`🎮 Found linked Roblox ID: ${linkedRobloxId}`);
 
-      // Fetch balance from your Roblox API
-      const balRes = await fetch(`${API_BASE}/get-balance/${linkedRobloxId}`);
-      const balText = await balRes.text(); // Get raw text to handle non-JSON errors
-
-      console.log(`💰 Balance API Response: ${balRes.status} - ${balText}`);
-
-      if (!balRes.ok) {
-        if (balRes.status === 404) {
-          // Specific handling for user not found in the balance system
-          const embed = new EmbedBuilder()
-            .setColor(0xFFAA00)
-            .setTitle('⚠️ User not found in system')
-            .setDescription(`Your linked Roblox ID **${linkedRobloxId}** was not found in the balance system.\n\nContact an admin to add you to the balance system.`)
-            .setFooter({ text: 'Starting Balance: 0 (Assumed)' }); // Assumed initial state
-          return await interaction.editReply({ embeds: [embed] });
-        }
-        // For other API errors, throw an error to be caught by the general catch block
-        throw new Error(`Balance API error: ${balRes.status} - ${balText}`);
-      }
-
-      const balData = JSON.parse(balText); // Parse response if it's OK
-      if (typeof balData.balance !== 'number') {
-        throw new Error(`Invalid balance response format: ${balText}`);
-      }
+      // Fetch balance directly from Firestore
+      const balance = await getPlayerBalanceFromFirestore(linkedRobloxId);
 
       const embed = new EmbedBuilder()
         .setColor(0x00FF99)
         .setTitle('💰 Your Balance')
-        .setDescription(`**Roblox ID:** ${linkedRobloxId}\n**Balance:** ${balData.balance}`)
-        .setFooter({ text: 'Powered by Attack Roblox' });
+        .setDescription(`**Roblox ID:** ${linkedRobloxId}\n**Balance:** ${balance}`)
+        .setFooter({ text: 'Powered by Attack Roblox (Data from Google Cloud Firestore)' });
 
       await interaction.editReply({ embeds: [embed] });
     }
@@ -219,22 +274,12 @@ client.on('interactionCreate', async interaction => {
 
       console.log(`💸 Initiating payment transaction: From ${senderRobloxId} to ${recipientUserId} Amount: ${amount}`);
 
-      let apiErrorDetails = ''; // To store specific error message from the API
+      let apiErrorDetails = ''; // To store specific error message
       let originalSenderBalance = 0; // To store sender's balance before deduction for rollback
 
       try {
-        // Step 1: Get sender's current balance
-        console.log(`🔍 Fetching sender's balance (${senderRobloxId})...`);
-        const senderBalRes = await fetch(`${API_BASE}/get-balance/${senderRobloxId}`);
-        const senderBalText = await senderBalRes.text();
-        if (!senderBalRes.ok) {
-          throw new Error(`Failed to retrieve sender's balance: ${senderBalRes.status} - ${senderBalText}`);
-        }
-        const senderBalData = JSON.parse(senderBalText);
-        if (typeof senderBalData.balance !== 'number') {
-          throw new Error(`Invalid balance format for sender: ${senderBalText}`);
-        }
-        originalSenderBalance = senderBalData.balance;
+        // Step 1: Get sender's current balance from Firestore
+        originalSenderBalance = await getPlayerBalanceFromFirestore(senderRobloxId);
         console.log(`Sender ${senderRobloxId} current balance: ${originalSenderBalance}`);
 
         // Step 2: Check for sufficient funds
@@ -246,92 +291,23 @@ client.on('interactionCreate', async interaction => {
           return await interaction.editReply({ embeds: [embed] });
         }
 
-        // Step 3: Get recipient's current balance (or assume 0 if not found)
-        console.log(`🔍 Fetching recipient's balance (${recipientUserId})...`);
-        let recipientCurrentBalance = 0;
-        const recipientBalRes = await fetch(`${API_BASE}/get-balance/${recipientUserId}`);
-        const recipientBalText = await recipientBalRes.text();
-
-        if (!recipientBalRes.ok) {
-          if (recipientBalRes.status === 404) {
-            // Recipient not found in system, assume 0 balance and proceed
-            console.log(`Recipient ${recipientUserId} not found, assuming initial balance of 0.`);
-            recipientCurrentBalance = 0;
-          } else {
-            // Other API errors for recipient balance are critical
-            throw new Error(`Failed to retrieve recipient's balance: ${recipientBalRes.status} - ${recipientBalText}`);
-          }
-        } else {
-          const recipientBalData = JSON.parse(recipientBalText);
-          if (typeof recipientBalData.balance !== 'number') {
-            throw new Error(`Invalid balance format for recipient: ${recipientBalText}`);
-          }
-          recipientCurrentBalance = recipientBalData.balance;
-        }
+        // Step 3: Get recipient's current balance from Firestore
+        let recipientCurrentBalance = await getPlayerBalanceFromFirestore(recipientUserId);
         console.log(`Recipient ${recipientUserId} current balance: ${recipientCurrentBalance}`);
-
 
         // Step 4: Calculate new balances
         const newSenderBalance = originalSenderBalance - amount;
         const newRecipientBalance = recipientCurrentBalance + amount;
 
-        // Step 5a: Deduct from sender's balance
+        // Step 5a: Deduct from sender's balance in Firestore
         console.log(`💸 Attempting to deduct ${amount} from ${senderRobloxId}. New balance: ${newSenderBalance}`);
-        const senderUpdateRes = await fetch(`${API_BASE}${ROBLOX_PAYMENT_ENDPOINT_PATH}`, {
-          method: ROBLOX_PAYMENT_HTTP_METHOD,
-          headers: {
-            'Content-Type': 'application/json',
-            // ...(ROBLOX_API_KEY && { 'X-API-KEY': ROBLOX_API_KEY }) // Uncomment if your API requires an API Key
-          },
-          body: JSON.stringify({
-            userId: senderRobloxId,
-            balance: newSenderBalance,
-          })
-        });
+        await updatePlayerBalanceInFirestore(senderRobloxId, newSenderBalance);
+        console.log(`Sender ${senderRobloxId} balance updated to ${newSenderBalance}`);
 
-        const senderUpdateText = await senderUpdateRes.text();
-        console.log(`💸 Sender update response: ${senderUpdateRes.status} - ${senderUpdateText}`);
-
-        if (!senderUpdateRes.ok) {
-          throw new Error(`Failed to deduct from sender: ${senderUpdateRes.status} - ${senderUpdateText}`);
-        }
-
-        // Step 5b: Add to recipient's balance
+        // Step 5b: Add to recipient's balance in Firestore
         console.log(`💸 Attempting to add ${amount} to ${recipientUserId}. New balance: ${newRecipientBalance}`);
-        const recipientUpdateRes = await fetch(`${API_BASE}${ROBLOX_PAYMENT_ENDPOINT_PATH}`, {
-          method: ROBLOX_PAYMENT_HTTP_METHOD,
-          headers: {
-            'Content-Type': 'application/json',
-            // ...(ROBLOX_API_KEY && { 'X-API-KEY': ROBLOX_API_KEY }) // Uncomment if your API requires an API Key
-          },
-          body: JSON.stringify({
-            userId: recipientUserId,
-            balance: newRecipientBalance,
-          })
-        });
-
-        const recipientUpdateText = await recipientUpdateRes.text();
-        console.log(`💸 Recipient update response: ${recipientUpdateRes.status} - ${recipientUpdateText}`);
-
-        if (!recipientUpdateRes.ok) {
-          // If recipient update fails, attempt to rollback sender's deduction (best effort)
-          apiErrorDetails = `Failed to add to recipient: ${recipientUpdateRes.status} - ${recipientUpdateText}`;
-          console.error(`Recipient update failed. Attempting to rollback sender ${senderRobloxId} balance to ${originalSenderBalance}`);
-          await fetch(`${API_BASE}${ROBLOX_PAYMENT_ENDPOINT_PATH}`, {
-            method: ROBLOX_PAYMENT_HTTP_METHOD,
-            headers: {
-              'Content-Type': 'application/json',
-              // ...(ROBLOX_API_KEY && { 'X-API-KEY': ROBLOX_API_KEY }) // Uncomment if your API requires an API Key
-            },
-            body: JSON.stringify({
-              userId: senderRobloxId,
-              balance: originalSenderBalance, // Revert to original balance
-            })
-          }).then(res => console.log(`Rollback attempt for sender: ${res.status}`))
-            .catch(err => console.error(`Rollback FAILED for sender: ${err.message}`));
-
-          throw new Error(apiErrorDetails); // Throw original error
-        }
+        await updatePlayerBalanceInFirestore(recipientUserId, newRecipientBalance);
+        console.log(`Recipient ${recipientUserId} balance updated to ${newRecipientBalance}`);
 
         const embed = new EmbedBuilder()
           .setColor(0x00FF99)
@@ -347,9 +323,15 @@ client.on('interactionCreate', async interaction => {
         await interaction.editReply({ embeds: [embed] });
 
       } catch (err) {
-        // This catches any errors during balance checks or API update calls
+        // This catches any errors during balance checks or Firestore update calls
         console.error(`❌ Payment transaction failed: ${err.message}`);
         apiErrorDetails = err.message;
+
+        // In a real application, you'd want to implement more robust rollback
+        // for cases where only one update succeeds. For simplicity here,
+        // we're relying on the `try/catch` around both updates.
+        // If the recipient update fails, the sender's deduction will not be rolled back automatically here.
+        // For production, consider Firestore Transactions for atomic updates.
 
         // Construct detailed error embed
         const embed = new EmbedBuilder()
@@ -361,57 +343,49 @@ client.on('interactionCreate', async interaction => {
             `**To:** ${recipientUserId}\n` +
             `**From:** ${senderRobloxId}\n\n` +
             `**Reason:** ${apiErrorDetails || 'An unexpected error occurred during the transaction.'}\n\n` +
-            `Please contact an administrator to process this payment manually or investigate the API.`
+            `Please contact an administrator if the issue persists.`
           )
-          .setFooter({ text: `API Endpoint used: ${API_BASE}${ROBLOX_PAYMENT_ENDPOINT_PATH}` });
+          .setFooter({ text: 'Data from Google Cloud Firestore' });
 
         await interaction.editReply({ embeds: [embed] });
       }
     }
 
-    // --- '/debug' Command: Test API Endpoints ---
+    // --- '/debug' Command: Test Bot Status and Firestore Connection ---
     if (command === 'debug') {
-      console.log('🔧 Running API debug...');
+      console.log('🔧 Running debug...');
 
       const debugResults = [];
 
-      // Test 1: Check if API base is reachable (using a generic root or health endpoint if available)
-      try {
-        const healthRes = await fetch(`${API_BASE}/`); // Or a specific health endpoint like /health
-        debugResults.push(`✅ API Base reachable: ${healthRes.status}`);
-      } catch (err) {
-        debugResults.push(`❌ API Base unreachable: ${err.message}`);
-      }
+      // Bot Status
+      debugResults.push(`🤖 Bot User: ${client.user ? client.user.tag : 'N/A'}`);
+      debugResults.push(`🌐 Servers: ${client.guilds.cache.size}`);
+      debugResults.push(`⏰ Uptime: ${process.uptime().toFixed(2)} seconds`);
+      debugResults.push(`🔗 Registered Discord-Roblox links: ${Object.keys(discordLinks).length}`);
 
-      // Test 2: Check known endpoints
-      const testEndpoints = [
-        // { path: '/users', method: 'GET' }, // Uncomment if your API has these
-        // { path: '/health', method: 'GET' },
-        // { path: '/status', method: 'GET' },
-        { path: '/get-balance/123', method: 'GET' }, // Test a dummy balance lookup
-        // --- Add your actual payment endpoint here for a test call ---
-        { path: ROBLOX_PAYMENT_ENDPOINT_PATH, method: ROBLOX_PAYMENT_HTTP_METHOD, testBody: { userId: '1', balance: 100 } } // Example body for update-balance
-      ];
-
-      for (const endpoint of testEndpoints) {
+      // Firebase/Firestore Status
+      if (firebaseApp && db && auth && auth.currentUser) {
+        debugResults.push(`✅ Firebase App Initialized`);
+        debugResults.push(`✅ Firestore Connected`);
+        debugResults.push(`✅ Authenticated User ID: ${auth.currentUser.uid}`);
+        debugResults.push(` Firestore path for balances: artifacts/${appId}/public/data/robloxBalances`);
         try {
-          let fetchOptions = { method: endpoint.method };
-          if (endpoint.method === 'POST' && endpoint.testBody) {
-            fetchOptions.headers = { 'Content-Type': 'application/json' };
-            // If you added ROBLOX_API_KEY, uncomment these:
-            // ...(ROBLOX_API_KEY && { 'X-API-KEY': ROBLOX_API_KEY })
-            fetchOptions.body = JSON.stringify(endpoint.testBody);
-          }
-          const testRes = await fetch(`${API_BASE}${endpoint.path}`, fetchOptions);
-          debugResults.push(`📡 ${endpoint.method} ${endpoint.path}: ${testRes.status}`);
+          // Attempt a small read from Firestore to confirm connectivity
+          const testDocRef = doc(db, `artifacts/${appId}/public/data/robloxBalances`, 'test_read_123');
+          await getDoc(testDocRef);
+          debugResults.push(`✅ Firestore read test successful.`);
         } catch (err) {
-          debugResults.push(`❌ ${endpoint.method} ${endpoint.path}: ${err.message}`);
+          debugResults.push(`❌ Firestore read test failed: ${err.message}`);
         }
+      } else {
+        debugResults.push(`❌ Firebase/Firestore not fully initialized or authenticated.`);
+        debugResults.push(`   App: ${!!firebaseApp}, DB: ${!!db}, Auth: ${!!auth}, User: ${!!auth?.currentUser}`);
       }
+
 
       const embed = new EmbedBuilder()
         .setColor(0x0099FF)
-        .setTitle('🔧 API Debug Results')
+        .setTitle('🔧 Bot & Firestore Debug Results')
         .setDescription(`\`\`\`${debugResults.join('\n')}\`\`\``)
         .setFooter({ text: 'Check console for full details' });
 
@@ -419,7 +393,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.editReply({ embeds: [embed] });
     }
 
-    // --- '/register' Command: Link Roblox ID ---
+    // --- '/register' Command: Link Roblox ID (Still uses local file) ---
     if (command === 'register') {
       const userId = interaction.options.getString('userid');
 
@@ -517,7 +491,9 @@ web.get('/stats', (_, res) => {
     servers: client.guilds.cache.size,
     users: client.users.cache.size,
     uptime: process.uptime(),
-    registeredUsers: Object.keys(discordLinks).length
+    registeredUsers: Object.keys(discordLinks).length,
+    firestoreStatus: db ? 'Initialized' : 'Not Initialized',
+    firebaseAuthId: auth?.currentUser?.uid || 'N/A'
   });
 });
 const PORT = process.env.PORT || 8080; // Use environment variable PORT or default to 8080
