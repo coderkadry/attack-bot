@@ -1,13 +1,18 @@
 {
-  "name": "attack-discord-bot",
+  "name": "attack-bot",
   "version": "1.0.0",
-  "type": "module",
+  "description": "A Roblox-Discord bot.",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "discord.js": "^14.11.0",
-    "express": "^4.18.2",
-    "node-fetch": "^3.3.2"
+    "discord.js": "^14.0.0",
+    "dotenv": "^16.0.0",
+    "express": "^4.18.0",
+    "firebase-admin": "^11.0.0"
   }
 }
