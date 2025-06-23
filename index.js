@@ -51,6 +51,15 @@ async function initializeFirebaseAdminSDK() {
         throw new Error('Project ID is missing from the service account key file. Please ensure you downloaded the correct JSON key.');
     }
 
+    // --- NEW DEBUGGING / FIX ATTEMPT ---
+    console.log(`Checking admin object type: ${typeof admin}`);
+    console.log(`Checking admin.credential type: ${typeof admin.credential}`);
+
+    if (!admin || typeof admin.credential === 'undefined' || typeof admin.credential.cert === 'undefined') {
+        throw new Error('Firebase Admin SDK (admin.credential.cert) is not available or not properly loaded. This might indicate an issue with the firebase-admin package installation or module loading timing.');
+    }
+
+
     // Initialize Firebase Admin SDK, explicitly providing the projectId from the service account
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
@@ -72,9 +81,11 @@ async function initializeFirebaseAdminSDK() {
   }
 }
 
-// Call the initialization function
-initializeFirebaseAdminSDK();
-
+// Call the initialization function after a short delay
+// This can sometimes help with module loading race conditions in ESM environments
+setTimeout(() => {
+    initializeFirebaseAdminSDK();
+}, 500); // 500ms delay to allow modules to fully load
 
 // --- Local Storage for Discord-Roblox Links (Still local file-based) ---
 // This stores links between Discord IDs and Roblox User IDs in a local JSON file.
@@ -518,3 +529,34 @@ client.login(TOKEN).catch(err => {
   console.error('Error:', err.message);
   process.exit(1); // Exit the process if login fails
 });
+
+```
+I've updated the `Attack Roblox Discord Bot (with Service Account)` Canvas with the new debugging checks and the small delay for Firebase initialization.
+
+Now, please follow these precise steps to apply the update and check the logs:
+
+1.  **Copy the entire code from the Canvas above.**
+2.  **Replace the *entire* content of your `index.js` file** on your **local computer** with this new code. Save the file.
+3.  **Commit and Push** these changes to your GitHub repository.
+    * `git add .`
+    * `git commit -m "Firebase initialization delay and detailed checks"`
+    * `git push origin main` (or your branch name)
+4.  **On your Google Cloud VM (in your SSH window):**
+    * **Stop the bot:** `pm2 stop attack-bot`
+    * **Go to your bot's folder:** `cd ~/attack-bot`
+    * **Pull the latest code:** `git pull origin main` (or your branch name)
+    * **Perform a deep clean of Node.js modules and cache:**
+        ```bash
+        rm -rf node_modules
+        rm -f package-lock.json
+        npm cache clean --force
+        ```
+    * **Reinstall all Node.js packages cleanly:**
+        ```bash
+        npm install
+        ```
+        * **Watch this command very carefully for any `npm ERR!` or `npm WARN` lines (other than deprecation warnings).**
+    * **Start the bot:** `pm2 start attack-bot`
+    * **Check the logs:** `pm2 logs attack-bot --lines 200` (show more lines to see everything)
+
+Please share the **full output** of the `npm install` command (if it shows any errors) and then the **full output** of `pm2 logs attack-bot --lines 200`. The new log messages in the Canvas will help us pinpoint exactly what's happening with `admin.credentia
