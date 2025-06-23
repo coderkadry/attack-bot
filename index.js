@@ -1,53 +1,74 @@
-const dotenv = require('dotenv');
+import dotenv from 'dotenv';
 dotenv.config();
 
 import {
-  Client,
-  GatewayIntentBits,
-  REST,
-  Routes,
-  SlashCommandBuilder,
-  EmbedBuilder,
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  EmbedBuilder,
 } from 'discord.js';
 import express from 'express';
 import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
 
-// ... (rest of your imports and setup)
+// --- Configuration ---
+const TOKEN = process.env.DISCORD_TOKEN; // Your Discord Bot Token from .env
+const CLIENT_ID = '1386338165916438538'; // Your Discord Bot's Client ID
+const API_BASE = 'https://attack-roblox-api-135053415446.europe-west3.run.app'; // The base URL for your Roblox API
 
-const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = '1386338165916438538';
-const API_BASE = 'https://attack-roblox-api-135053415446.europe-west3.run.app';
-const ROBLOX_API_KEY = process.env.ROBLOX_API_KEY; // <<< ADD THIS if your API needs an API key
+// 🚨🚨🚨 IMPORTANT: This is updated based on your provided Lua script! 🚨🚨🚨
+// Your API's endpoint for updating a user's balance.
+const ROBLOX_PAYMENT_ENDPOINT_PATH = '/update-balance'; 
 
-// Local storage for Discord-Roblox links (since API doesn't have registration)
+// 🚨🚨🚨 IMPORTANT: CONFIRM THIS HTTP METHOD 🚨🚨🚨
+// For sending payments/updates, it is almost certainly 'POST'.
+const ROBLOX_PAYMENT_HTTP_METHOD = 'POST';
+
+// 🚨🚨🚨 IMPORTANT: ADD YOUR ROBLOX API KEY HERE IF REQUIRED 🚨🚨🚨
+// If your Roblox API requires an API key for authentication, add it to your .env file
+// (e.g., ROBLOX_API_KEY=your_secret_key) and uncomment the line below.
+// const ROBLOX_API_KEY = process.env.ROBLOX_API_KEY;
+
+
+// --- Local Storage for Discord-Roblox Links ---
+// This stores links between Discord IDs and Roblox User IDs in a local JSON file.
 const LINKS_FILE = './discord_links.json';
-
-// Load existing links
 let discordLinks = {};
+
+// Load existing links from file on startup
 try {
   if (fs.existsSync(LINKS_FILE)) {
     discordLinks = JSON.parse(fs.readFileSync(LINKS_FILE, 'utf8'));
+    console.log(`🔗 Loaded ${Object.keys(discordLinks).length} Discord-Roblox links.`);
+  } else {
+    console.log('Creating new links file as it does not exist...');
+    // Initialize as empty object if file doesn't exist
   }
 } catch (err) {
-  console.log('Creating new links file...');
-  discordLinks = {};
+  console.error('❌ Failed to load links file, starting fresh:', err.message);
+  discordLinks = {}; // Fallback to empty if parsing fails
 }
 
-// Save links to file
+// Save current links to file
 function saveLinks() {
   try {
     fs.writeFileSync(LINKS_FILE, JSON.stringify(discordLinks, null, 2));
+    console.log('🔗 Discord-Roblox links saved successfully.');
   } catch (err) {
-    console.error('Failed to save links:', err.message);
+    console.error('❌ Failed to save links:', err.message);
   }
 }
 
+// --- Discord Client Setup ---
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [GatewayIntentBits.Guilds], // Required for guild-related events like slash commands
 });
 
+// --- Slash Command Definitions ---
+// Define all the slash commands for your bot.
 const commands = [
   new SlashCommandBuilder()
     .setName('bal')
@@ -58,7 +79,7 @@ const commands = [
     .setDescription('🔗 Link or change your Roblox ID')
     .addStringOption(option =>
       option.setName('userid')
-        .setDescription('Your Roblox UserId')
+        .setDescription('Your Roblox UserId (e.g., 123456789)')
         .setRequired(true)
     ),
 
@@ -67,28 +88,30 @@ const commands = [
     .setDescription('💸 Pay Robux to another Roblox user')
     .addStringOption(option =>
       option.setName('userid')
-        .setDescription('Recipient Roblox UserId')
+        .setDescription('Recipient Roblox UserId (e.g., 987654321)')
         .setRequired(true)
     )
     .addIntegerOption(option =>
       option.setName('amount')
-        .setDescription('Amount to pay')
+        .setDescription('Amount to pay (must be at least 1)')
         .setRequired(true)
         .setMinValue(1)
     ),
 
   new SlashCommandBuilder()
     .setName('debug')
-    .setDescription('🔧 Debug API endpoints'),
-].map(cmd => cmd.toJSON());
+    .setDescription('🔧 Debug API endpoints and bot status'),
+].map(cmd => cmd.toJSON()); // Convert command builders to JSON for Discord API
 
-const rest = new REST({ version: '10' }).setToken(TOKEN);
+const rest = new REST({ version: '10' }).setToken(TOKEN); // REST API for Discord interactions
 
+// --- Function to Register Global Slash Commands ---
 async function registerGlobalCommands() {
   try {
-    console.log('📦 Registering global commands...');
+    console.log('📦 Registering global slash commands...');
     console.log('🔧 Commands to register:', commands.map(cmd => cmd.name));
     
+    // Register commands globally (takes 1-5 minutes to propagate)
     const result = await rest.put(
       Routes.applicationCommands(CLIENT_ID),
       { body: commands }
@@ -98,23 +121,25 @@ async function registerGlobalCommands() {
     console.log('📋 Registered commands:', result.map(cmd => cmd.name));
   } catch (err) {
     console.error('❌ Global command registration failed:', err.message);
-    console.error('❌ Full error:', err);
+    console.error('❌ Full error details:', err);
   }
 }
 
+// --- Interaction Handling ---
+// This is the main event listener for all slash command interactions.
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand()) return;
+  if (!interaction.isChatInputCommand()) return; // Only process chat input commands
 
   const command = interaction.commandName;
   const discordId = interaction.user.id;
 
   try {
-    await interaction.deferReply();
+    await interaction.deferReply(); // Acknowledge the command quickly to prevent "Interaction failed"
 
+    // --- '/bal' Command: Check Roblox Balance ---
     if (command === 'bal') {
       console.log(`🔍 Checking balance for Discord ID: ${discordId}`);
       
-      // Check local links first
       const linkedRobloxId = discordLinks[discordId];
       
       if (!linkedRobloxId) {
@@ -127,14 +152,15 @@ client.on('interactionCreate', async interaction => {
 
       console.log(`🎮 Found linked Roblox ID: ${linkedRobloxId}`);
 
-      // Get balance from API
+      // Fetch balance from your Roblox API
       const balRes = await fetch(`${API_BASE}/get-balance/${linkedRobloxId}`);
-      const balText = await balRes.text();
+      const balText = await balRes.text(); // Get raw text to handle non-JSON errors
       
       console.log(`💰 Balance API Response: ${balRes.status} - ${balText}`);
 
       if (!balRes.ok) {
         if (balRes.status === 404) {
+          // Specific handling for user not found in the balance system
           const embed = new EmbedBuilder()
             .setColor(0xFFAA00)
             .setTitle('⚠️ User not found in system')
@@ -142,12 +168,13 @@ client.on('interactionCreate', async interaction => {
             .setFooter({ text: 'Starting Balance: 0' });
           return await interaction.editReply({ embeds: [embed] });
         }
+        // For other API errors, throw an error to be caught by the general catch block
         throw new Error(`Balance API error: ${balRes.status} - ${balText}`);
       }
 
-      const balData = JSON.parse(balText);
+      const balData = JSON.parse(balText); // Parse response if it's OK
       if (typeof balData.balance !== 'number') {
-        throw new Error(`Invalid balance response: ${balText}`);
+        throw new Error(`Invalid balance response format: ${balText}`);
       }
 
       const embed = new EmbedBuilder()
@@ -159,12 +186,12 @@ client.on('interactionCreate', async interaction => {
       await interaction.editReply({ embeds: [embed] });
     }
 
+    // --- '/pay' Command: Transfer Robux ---
     if (command === 'pay') {
       console.log(`💸 Pay command initiated by Discord ID: ${discordId}`);
       
-      // Check if user is registered
+      // Ensure sender is registered
       const senderRobloxId = discordLinks[discordId];
-      
       if (!senderRobloxId) {
         const embed = new EmbedBuilder()
           .setColor(0xFF0000)
@@ -176,7 +203,7 @@ client.on('interactionCreate', async interaction => {
       const recipientUserId = interaction.options.getString('userid');
       const amount = interaction.options.getInteger('amount');
 
-      // Validate recipient Roblox ID format
+      // Validate recipient Roblox ID format (numbers only)
       if (!/^\d+$/.test(recipientUserId)) {
         const embed = new EmbedBuilder()
           .setColor(0xFF0000)
@@ -185,7 +212,7 @@ client.on('interactionCreate', async interaction => {
         return await interaction.editReply({ embeds: [embed] });
       }
 
-      // Check if trying to pay themselves
+      // Prevent self-payment
       if (senderRobloxId === recipientUserId) {
         const embed = new EmbedBuilder()
           .setColor(0xFF0000)
@@ -194,75 +221,136 @@ client.on('interactionCreate', async interaction => {
         return await interaction.editReply({ embeds: [embed] });
       }
 
-      console.log(`💸 Processing payment: ${senderRobloxId} -> ${recipientUserId} (${amount})`);
-
-      // --- START MODIFICATION AREA (Based on your API's requirements) ---
-      // This section needs to be updated based on your actual API's payment endpoint and payload.
+      console.log(`💸 Initiating payment transaction: From ${senderRobloxId} to ${recipientUserId} Amount: ${amount}`);
 
       let paymentSuccessful = false;
-      let apiErrorDetails = ''; // To store specific error from the API
-
-      // EXAMPLE: Assuming your API has ONE specific endpoint like '/process-payment'
-      // and expects 'senderId', 'recipientId', and 'robuxAmount' as JSON.
-      // Also assuming it requires an 'X-API-KEY' header.
-      const CORRECT_PAYMENT_ENDPOINT = `${API_BASE}/process-payment`; // <<< UPDATE THIS
-      const PAYMENT_METHOD = 'POST'; // <<< UPDATE THIS if different
+      let apiErrorDetails = ''; // To store specific error message from the API
+      let originalSenderBalance = 0; // To store sender's balance before deduction for rollback
 
       try {
-        console.log(`💸 Attempting payment via: ${CORRECT_PAYMENT_ENDPOINT}`);
-        
-        const payRes = await fetch(CORRECT_PAYMENT_ENDPOINT, {
-          method: PAYMENT_METHOD,
+        // Step 1: Get sender's current balance
+        console.log(`🔍 Fetching sender's balance (${senderRobloxId})...`);
+        const senderBalRes = await fetch(`${API_BASE}/get-balance/${senderRobloxId}`);
+        const senderBalText = await senderBalRes.text();
+        if (!senderBalRes.ok) {
+          throw new Error(`Failed to retrieve sender's balance: ${senderBalRes.status} - ${senderBalText}`);
+        }
+        const senderBalData = JSON.parse(senderBalText);
+        if (typeof senderBalData.balance !== 'number') {
+          throw new Error(`Invalid balance format for sender: ${senderBalText}`);
+        }
+        originalSenderBalance = senderBalData.balance;
+        console.log(`Sender ${senderRobloxId} current balance: ${originalSenderBalance}`);
+
+        // Step 2: Check for sufficient funds
+        if (originalSenderBalance < amount) {
+          const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('❌ Payment Failed: Insufficient Funds')
+            .setDescription(`You only have **${originalSenderBalance} Robux**, but you are trying to pay **${amount} Robux**. You need more funds.`);
+          return await interaction.editReply({ embeds: [embed] });
+        }
+
+        // Step 3: Get recipient's current balance
+        console.log(`🔍 Fetching recipient's balance (${recipientUserId})...`);
+        let recipientCurrentBalance = 0;
+        const recipientBalRes = await fetch(`${API_BASE}/get-balance/${recipientUserId}`);
+        const recipientBalText = await recipientBalRes.text();
+        if (!recipientBalRes.ok && recipientBalRes.status !== 404) {
+          // If it's not OK and not a 404 (user not found), then it's an actual error
+          throw new Error(`Failed to retrieve recipient's balance: ${recipientBalRes.status} - ${recipientBalText}`);
+        } else if (recipientBalRes.ok) {
+          const recipientBalData = JSON.parse(recipientBalText);
+          if (typeof recipientBalData.balance !== 'number') {
+            throw new Error(`Invalid balance format for recipient: ${recipientBalText}`);
+          }
+          recipientCurrentBalance = recipientBalData.balance;
+        }
+        console.log(`Recipient ${recipientUserId} current balance: ${recipientCurrentBalance}`);
+
+        // Step 4: Calculate new balances
+        const newSenderBalance = originalSenderBalance - amount;
+        const newRecipientBalance = recipientCurrentBalance + amount;
+
+        // Step 5a: Deduct from sender's balance
+        console.log(`💸 Attempting to deduct ${amount} from ${senderRobloxId}. New balance: ${newSenderBalance}`);
+        const senderUpdateRes = await fetch(`${API_BASE}${ROBLOX_PAYMENT_ENDPOINT_PATH}`, {
+          method: ROBLOX_PAYMENT_HTTP_METHOD,
           headers: {
             'Content-Type': 'application/json',
-            'X-API-KEY': ROBLOX_API_KEY // <<< ADD THIS if your API requires an API key
+            // ...(ROBLOX_API_KEY && { 'X-API-KEY': ROBLOX_API_KEY }) // Uncomment if needed
           },
           body: JSON.stringify({
-            // <<< UPDATE THESE FIELD NAMES AND STRUCTURE based on your API's requirements
-            senderId: senderRobloxId,
-            recipientId: recipientUserId,
-            robuxAmount: amount
+            userId: senderRobloxId,
+            balance: newSenderBalance,
           })
         });
 
-        const payText = await payRes.text();
-        console.log(`💸 ${CORRECT_PAYMENT_ENDPOINT} Response: ${payRes.status} - ${payText}`);
+        const senderUpdateText = await senderUpdateRes.text();
+        console.log(`💸 Sender update response: ${senderUpdateRes.status} - ${senderUpdateText}`);
 
-        if (payRes.ok) {
-          console.log(`✅ Payment successful via ${CORRECT_PAYMENT_ENDPOINT}`);
-          paymentSuccessful = true;
-          
-          const embed = new EmbedBuilder()
-            .setColor(0x00FF99)
-            .setTitle('✅ Payment Successful!')
-            .setDescription(
-              `**Amount:** ${amount}\n` +
-              `**To:** ${recipientUserId}\n` +
-              `**From:** ${senderRobloxId}\n\n` +
-              `Transaction completed successfully!`
-            )
-            .setFooter({ text: 'Use /bal to check your updated balance.' });
-
-          await interaction.editReply({ embeds: [embed] });
-        } else {
-          apiErrorDetails = `API returned error: ${payRes.status} - ${payText}`;
-          console.error(`❌ Payment failed via ${CORRECT_PAYMENT_ENDPOINT}: ${apiErrorDetails}`);
-          
-          // You can add more specific error handling here based on API status codes or error messages
-          if (payRes.status === 400 && payText.includes("INSUFFICIENT_FUNDS")) { // Example of parsing API response
-            apiErrorDetails = 'Insufficient funds for this transaction.';
-          } else if (payRes.status === 404 && payText.includes("RECIPIENT_NOT_FOUND")) {
-            apiErrorDetails = 'Recipient Roblox ID not found in the payment system.';
-          }
+        if (!senderUpdateRes.ok) {
+          throw new Error(`Failed to deduct from sender: ${senderUpdateRes.status} - ${senderUpdateText}`);
         }
-      } catch (err) {
-        console.log(`❌ Error connecting to payment API: ${err.message}`);
-        apiErrorDetails = `Network/Connection Error: ${err.message}`;
-      }
 
-      if (!paymentSuccessful) {
-        console.error('💸 Payment failed. Details:', apiErrorDetails);
-        
+        // Step 5b: Add to recipient's balance
+        console.log(`💸 Attempting to add ${amount} to ${recipientUserId}. New balance: ${newRecipientBalance}`);
+        const recipientUpdateRes = await fetch(`${API_BASE}${ROBLOX_PAYMENT_ENDPOINT_PATH}`, {
+          method: ROBLOX_PAYMENT_HTTP_METHOD,
+          headers: {
+            'Content-Type': 'application/json',
+            // ...(ROBLOX_API_KEY && { 'X-API-KEY': ROBLOX_API_KEY }) // Uncomment if needed
+          },
+          body: JSON.stringify({
+            userId: recipientUserId,
+            balance: newRecipientBalance,
+          })
+        });
+
+        const recipientUpdateText = await recipientUpdateRes.text();
+        console.log(`💸 Recipient update response: ${recipientUpdateRes.status} - ${recipientUpdateText}`);
+
+        if (!recipientUpdateRes.ok) {
+          // If recipient update fails, attempt to rollback sender's deduction (best effort)
+          apiErrorDetails = `Failed to add to recipient: ${recipientUpdateRes.status} - ${recipientUpdateText}`;
+          console.error(`Recipient update failed. Attempting to rollback sender ${senderRobloxId} balance to ${originalSenderBalance}`);
+          await fetch(`${API_BASE}${ROBLOX_PAYMENT_ENDPOINT_PATH}`, {
+            method: ROBLOX_PAYMENT_HTTP_METHOD,
+            headers: {
+              'Content-Type': 'application/json',
+              // ...(ROBLOX_API_KEY && { 'X-API-KEY': ROBLOX_API_KEY }) // Uncomment if needed
+            },
+            body: JSON.stringify({
+              userId: senderRobloxId,
+              balance: originalSenderBalance, // Revert to original balance
+            })
+          }).then(res => console.log(`Rollback attempt for sender: ${res.status}`))
+            .catch(err => console.error(`Rollback FAILED for sender: ${err.message}`));
+          
+          throw new Error(apiErrorDetails); // Throw original error
+        }
+
+        paymentSuccessful = true; // Both updates succeeded
+
+        const embed = new EmbedBuilder()
+          .setColor(0x00FF99)
+          .setTitle('✅ Payment Successful!')
+          .setDescription(
+            `**Amount:** ${amount}\n` +
+            `**To:** ${recipientUserId}\n` +
+            `**From:** ${senderRobloxId}\n\n` +
+            `Transaction completed successfully!`
+          )
+          .setFooter({ text: 'Use /bal to check your updated balance.' });
+
+        await interaction.editReply({ embeds: [embed] });
+
+      } catch (err) {
+        // This catches any errors during balance checks or API update calls
+        console.error(`❌ Payment transaction failed: ${err.message}`);
+        apiErrorDetails = err.message;
+
+        // Construct detailed error embed
         const embed = new EmbedBuilder()
           .setColor(0xFF0000)
           .setTitle('❌ Payment Failed')
@@ -271,15 +359,16 @@ client.on('interactionCreate', async interaction => {
             `**Attempted Amount:** ${amount}\n` +
             `**To:** ${recipientUserId}\n` +
             `**From:** ${senderRobloxId}\n\n` +
-            `**Reason:** ${apiErrorDetails || 'The payment system may not be available or encountered an unexpected error.'}\n\n` +
+            `**Reason:** ${apiErrorDetails || 'An unexpected error occurred during the transaction.'}\n\n` +
             `Please contact an administrator to process this payment manually or investigate the API.`
-          );
+          )
+          .setFooter({ text: `API Endpoint used: ${API_BASE}${ROBLOX_PAYMENT_ENDPOINT_PATH}` });
         
         await interaction.editReply({ embeds: [embed] });
       }
-      // --- END MODIFICATION AREA ---
     }
 
+    // --- '/debug' Command: Test API Endpoints ---
     if (command === 'debug') {
       console.log('🔧 Running API debug...');
       
@@ -293,31 +382,29 @@ client.on('interactionCreate', async interaction => {
         debugResults.push(`❌ API Base unreachable: ${err.message}`);
       }
       
-      // Test 2: Check available endpoints
+      // Test 2: Check known endpoints
       const testEndpoints = [
-        '/users',
-        '/health',
-        '/status',
-        '/get-balance/123',
-        // Add your actual payment endpoint here for a test call (e.g., `/process-payment`)
-        `${CORRECT_PAYMENT_ENDPOINT} (POST, dummy data)`
+        { path: '/users', method: 'GET' },
+        { path: '/health', method: 'GET' },
+        { path: '/status', method: 'GET' },
+        { path: '/get-balance/123', method: 'GET' }, // Test a dummy balance lookup
+        // --- Add your actual payment endpoint here for a test call ---
+        { path: ROBLOX_PAYMENT_ENDPOINT_PATH, method: ROBLOX_PAYMENT_HTTP_METHOD, testBody: { userId: '1', balance: 100 } } // Example body for update-balance
       ];
       
       for (const endpoint of testEndpoints) {
         try {
-            // For POST endpoints, you might need to send a minimal valid body for a proper test
-            let options = { method: 'GET' };
-            if (endpoint.includes('(POST, dummy data)')) {
-                options = {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...(ROBLOX_API_KEY && {'X-API-KEY': ROBLOX_API_KEY}) },
-                    body: JSON.stringify({ senderId: '1', recipientId: '2', robuxAmount: 1 })
-                };
+            let fetchOptions = { method: endpoint.method };
+            if (endpoint.method === 'POST' && endpoint.testBody) {
+                fetchOptions.headers = { 'Content-Type': 'application/json' };
+                // If you added ROBLOX_API_KEY, uncomment these:
+                // ...(ROBLOX_API_KEY && { 'X-API-KEY': ROBLOX_API_KEY })
+                fetchOptions.body = JSON.stringify(endpoint.testBody);
             }
-          const testRes = await fetch(`${API_BASE}${endpoint.split(' ')[0]}`, options);
-          debugResults.push(`📡 ${endpoint}: ${testRes.status}`);
+          const testRes = await fetch(`${API_BASE}${endpoint.path}`, fetchOptions);
+          debugResults.push(`📡 ${endpoint.method} ${endpoint.path}: ${testRes.status}`);
         } catch (err) {
-          debugResults.push(`❌ ${endpoint}: ${err.message}`);
+          debugResults.push(`❌ ${endpoint.method} ${endpoint.path}: ${err.message}`);
         }
       }
       
@@ -331,6 +418,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.editReply({ embeds: [embed] });
     }
 
+    // --- '/register' Command: Link Roblox ID ---
     if (command === 'register') {
       const userId = interaction.options.getString('userid');
       
@@ -365,15 +453,17 @@ client.on('interactionCreate', async interaction => {
     }
 
   } catch (err) {
-    console.error('❌ Error:', err.message);
-    console.error('❌ Stack:', err.stack);
+    // --- Global Error Handling for Interactions ---
+    console.error('❌ An unhandled error occurred during interaction:', err.message);
+    console.error('❌ Error Stack:', err.stack);
 
     const embed = new EmbedBuilder()
       .setColor(0xFF0000)
-      .setTitle('❌ An error occurred')
-      .setDescription(`\`\`\`${err.message}\`\`\``)
-      .setFooter({ text: 'Please try again later or contact support.' });
+      .setTitle('❌ An unexpected error occurred')
+      .setDescription(`Something went wrong while processing your command.\n\`\`\`${err.message}\`\`\``)
+      .setFooter({ text: 'Please try again later or contact support if the issue persists.' });
 
+    // Check if reply was already deferred or sent to avoid crashes
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ embeds: [embed] });
     } else {
@@ -382,16 +472,19 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
+// --- Bot Ready Event ---
+// This runs once when the bot successfully connects to Discord.
 client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   console.log(`🌐 Bot is active in ${client.guilds.cache.size} servers`);
   
-  // Wait a moment for the client to be fully ready
+  // Give Discord a moment to fully process bot's presence before registering commands.
   setTimeout(async () => {
-    await registerGlobalCommands();
-    
-    // Also clear any existing guild-specific commands that might be interfering
-    console.log('🧹 Clearing any old guild-specific commands...');
+    await registerGlobalCommands(); // Register slash commands
+
+    // Optionally clear old guild-specific commands to prevent conflicts.
+    // This ensures only global commands are active.
+    console.log('🧹 Clearing any old guild-specific commands (if present)...');
     for (const guild of client.guilds.cache.values()) {
       try {
         await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guild.id), { body: [] });
@@ -402,10 +495,10 @@ client.once('ready', async () => {
     }
     
     console.log('🎉 Bot setup complete! Commands should be available globally in 1-5 minutes.');
-  }, 2000);
+  }, 2000); // 2-second delay
 });
 
-// Handle guild join events
+// --- Guild Join/Leave Events (for logging purposes) ---
 client.on('guildCreate', guild => {
   console.log(`🎉 Joined new server: ${guild.name} (${guild.id})`);
 });
@@ -414,8 +507,10 @@ client.on('guildDelete', guild => {
   console.log(`👋 Left server: ${guild.name} (${guild.id})`);
 });
 
+// --- Web Server for Health Check / Stats ---
+// This small Express server provides a basic endpoint to check if the bot's process is running.
 const web = express();
-web.get('/', (_, res) => res.send('🤖 Bot is running globally!'));
+web.get('/', (_, res) => res.send('🤖 Attack Roblox Discord Bot is running globally!'));
 web.get('/stats', (_, res) => {
   res.json({
     servers: client.guilds.cache.size,
@@ -424,6 +519,8 @@ web.get('/stats', (_, res) => {
     registeredUsers: Object.keys(discordLinks).length
   });
 });
-web.listen(8080, () => console.log('🌐 Web server running on port 8080'));
+const PORT = process.env.PORT || 8080; // Use environment variable PORT or default to 8080
+web.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
 
+// --- Log in to Discord ---
 client.login(TOKEN);
