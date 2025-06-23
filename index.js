@@ -35,7 +35,16 @@ let authReady = false; // Flag to indicate if Firebase Admin SDK is initialized
 async function initializeFirebaseAdminSDK() {
   try {
     // Read the service account key from the specified path
-    const serviceAccount = JSON.parse(fs.readFileSync(SERVICE_ACCOUNT_KEY_PATH, 'utf8'));
+    console.log(`Attempting to read service account key from: ${SERVICE_ACCOUNT_KEY_PATH}`);
+    const serviceAccountContent = fs.readFileSync(SERVICE_ACCOUNT_KEY_PATH, 'utf8');
+    const serviceAccount = JSON.parse(serviceAccountContent);
+
+    // --- IMPORTANT DEBUGGING STEP ---
+    // Log the project_id from the service account key to confirm it's there
+    console.log(`Service Account Project ID found: ${serviceAccount.project_id}`);
+    if (!serviceAccount.project_id) {
+        throw new Error('Project ID is missing from the service account key file. Please ensure you downloaded the correct JSON key.');
+    }
 
     // Initialize Firebase Admin SDK, explicitly providing the projectId from the service account
     admin.initializeApp({
@@ -49,8 +58,10 @@ async function initializeFirebaseAdminSDK() {
     console.log('✅ Firebase Admin SDK initialized and Firestore connected.');
   } catch (error) {
     console.error('❌ Failed to initialize Firebase Admin SDK or connect to Firestore:', error.message);
-    console.error('Ensure your FIREBASE_SERVICE_ACCOUNT_KEY_PATH is correct and the file exists.');
-    console.error('Also verify your serviceAccountKey.json contains a "project_id" field.');
+    console.error(`Please verify:`);
+    console.error(`1. The file "${SERVICE_ACCOUNT_KEY_PATH}" exists on your Google Cloud VM.`);
+    console.error(`2. The contents of "${SERVICE_ACCOUNT_KEY_PATH}" are a valid JSON for a Firebase service account key.`);
+    console.error(`3. That JSON file contains a field named "project_id".`);
     // If it fails, db will remain undefined and authReady will be false.
   }
 }
