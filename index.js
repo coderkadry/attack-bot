@@ -1,6 +1,12 @@
 import dotenv from 'dotenv';
 dotenv.config(); // Load environment variables from .env file
 
+// Add debug logging for environment
+console.log('🔍 DISCORD_TOKEN exists:', !!process.env.DISCORD_TOKEN);
+console.log('🔍 TOKEN length:', process.env.DISCORD_TOKEN?.length || 0);
+console.log('🔍 Node.js version:', process.version);
+console.log('🔍 Working directory:', process.cwd());
+
 import {
   Client,
   GatewayIntentBits,
@@ -22,6 +28,13 @@ import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, getDocs } fro
 const TOKEN = process.env.DISCORD_TOKEN; // Your Discord Bot Token from .env
 const CLIENT_ID = '1386338165916438538'; // Your Discord Bot's Client ID (hardcoded as per your original code)
 
+// Validate token exists
+if (!TOKEN) {
+  console.error('❌ DISCORD_TOKEN not found in environment variables!');
+  console.error('❌ Make sure you have a .env file with DISCORD_TOKEN=your_bot_token');
+  process.exit(1);
+}
+
 // --- Firebase/Firestore Global Variables (Provided by Canvas Environment) ---
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Unique ID for your app in Canvas
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {}; // Firebase project config
@@ -32,10 +45,12 @@ let firebaseApp;
 let db;
 let auth;
 let currentUserId = null; // To store the authenticated user's ID
+let firebaseInitialized = false;
 
 // Asynchronous initialization and authentication
 async function initializeFirebaseAndAuth() {
   try {
+    console.log('🔥 Starting Firebase initialization...');
     firebaseApp = initializeApp(firebaseConfig);
     db = getFirestore(firebaseApp);
     auth = getAuth(firebaseApp);
@@ -59,12 +74,17 @@ async function initializeFirebaseAndAuth() {
       await signInAnonymously(auth);
       console.log('✅ Signed in anonymously.');
     }
+    
+    firebaseInitialized = true;
+    console.log('✅ Firebase initialization complete');
   } catch (error) {
     console.error('❌ Firebase initialization or authentication failed:', error);
+    console.log('⚠️ Bot will continue without Firebase functionality');
+    firebaseInitialized = false;
   }
 }
 
-// Call the initialization function
+// Start Firebase initialization but don't block Discord connection
 initializeFirebaseAndAuth();
 
 // --- Local Storage for Discord-Roblox Links (Still local file-based) ---
@@ -102,6 +122,20 @@ function saveLinks() {
 // --- Discord Client Setup ---
 const client = new Client({
   intents: [GatewayIntentBits.Guilds], // Required for guild-related events like slash commands
+});
+
+// Add error handling for Discord client
+client.on('error', (error) => {
+  console.error('❌ Discord client error:', error);
+});
+
+client.on('warn', (warning) => {
+  console.warn('⚠️ Discord client warning:', warning);
+});
+
+client.on('debug', (info) => {
+  // Uncomment next line for verbose debugging
+  // console.log('🔧 Discord debug:', info);
 });
 
 // --- Slash Command Definitions ---
@@ -165,29 +199,39 @@ async function registerGlobalCommands() {
 // --- Firestore Helper Functions ---
 // Gets a player's balance from Firestore. Returns 0 if user not found.
 async function getPlayerBalanceFromFirestore(robloxId) {
-  if (!db) {
+  if (!db || !firebaseInitialized) {
     console.error("Firestore not initialized yet!");
     return 0; // Or throw an error depending on desired behavior
   }
-  // Changed collection name to 'roblox-balances' for consistency with Firebase setup
-  const balanceDocRef = doc(db, `artifacts/${appId}/public/data/roblox-balances`, String(robloxId));
-  const balanceDocSnap = await getDoc(balanceDocRef);
-  if (balanceDocSnap.exists()) {
-    const data = balanceDocSnap.data();
-    return typeof data.balance === 'number' ? data.balance : 0;
+  try {
+    // Changed collection name to 'roblox-balances' for consistency with Firebase setup
+    const balanceDocRef = doc(db, `artifacts/${appId}/public/data/roblox-balances`, String(robloxId));
+    const balanceDocSnap = await getDoc(balanceDocRef);
+    if (balanceDocSnap.exists()) {
+      const data = balanceDocSnap.data();
+      return typeof data.balance === 'number' ? data.balance : 0;
+    }
+    return 0; // User not found in Firestore, assume 0 balance
+  } catch (error) {
+    console.error('❌ Error getting balance from Firestore:', error);
+    return 0;
   }
-  return 0; // User not found in Firestore, assume 0 balance
 }
 
 // Updates a player's balance in Firestore. Creates document if it doesn't exist.
 async function updatePlayerBalanceInFirestore(robloxId, newBalance) {
-  if (!db) {
+  if (!db || !firebaseInitialized) {
     console.error("Firestore not initialized yet!");
     return; // Or throw an error
   }
-  // Changed collection name to 'roblox-balances' for consistency with Firebase setup
-  const balanceDocRef = doc(db, `artifacts/${appId}/public/data/roblox-balances`, String(robloxId));
-  await setDoc(balanceDocRef, { balance: newBalance }, { merge: true }); // Use merge to avoid overwriting other fields if any
+  try {
+    // Changed collection name to 'roblox-balances' for consistency with Firebase setup
+    const balanceDocRef = doc(db, `artifacts/${appId}/public/data/roblox-balances`, String(robloxId));
+    await setDoc(balanceDocRef, { balance: newBalance }, { merge: true }); // Use merge to avoid overwriting other fields if any
+  } catch (error) {
+    console.error('❌ Error updating balance in Firestore:', error);
+    throw error;
+  }
 }
 
 // --- Interaction Handling ---
@@ -198,8 +242,9 @@ client.on('interactionCreate', async interaction => {
   const command = interaction.commandName;
   const discordId = interaction.user.id;
 
-  // Ensure Firestore is ready before processing commands that interact with it
-  if (!db || !auth.currentUser) {
+  // Check if Firestore is needed for this command
+  const firestoreCommands = ['bal', 'pay', 'debug'];
+  if (firestoreCommands.includes(command) && (!db || !auth.currentUser)) {
     await interaction.deferReply();
     const embed = new EmbedBuilder()
       .setColor(0xFF8C00)
@@ -366,11 +411,11 @@ client.on('interactionCreate', async interaction => {
       debugResults.push(`🔗 Registered Discord-Roblox links: ${Object.keys(discordLinks).length}`);
 
       // Firebase/Firestore Status
-      if (firebaseApp && db && auth && auth.currentUser) {
+      if (firebaseApp && db && auth && auth.currentUser && firebaseInitialized) {
         debugResults.push(`✅ Firebase App Initialized`);
         debugResults.push(`✅ Firestore Connected`);
         debugResults.push(`✅ Authenticated User ID: ${auth.currentUser.uid}`);
-        debugResults.push(` Firestore path for balances: artifacts/${appId}/public/data/roblox-balances`);
+        debugResults.push(`📁 Firestore path for balances: artifacts/${appId}/public/data/roblox-balances`);
         try {
           // Attempt a small read from Firestore to confirm connectivity
           const testDocRef = doc(db, `artifacts/${appId}/public/data/roblox-balances`, 'test_read_123');
@@ -381,9 +426,8 @@ client.on('interactionCreate', async interaction => {
         }
       } else {
         debugResults.push(`❌ Firebase/Firestore not fully initialized or authenticated.`);
-        debugResults.push(`   App: ${!!firebaseApp}, DB: ${!!db}, Auth: ${!!auth}, User: ${!!auth?.currentUser}`);
+        debugResults.push(`   App: ${!!firebaseApp}, DB: ${!!db}, Auth: ${!!auth}, User: ${!!auth?.currentUser}, Initialized: ${firebaseInitialized}`);
       }
-
 
       const embed = new EmbedBuilder()
         .setColor(0x0099FF)
@@ -454,6 +498,7 @@ client.on('interactionCreate', async interaction => {
 client.once('ready', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   console.log(`🌐 Bot is active in ${client.guilds.cache.size} servers`);
+  console.log(`🆔 Bot ID: ${client.user.id}`);
 
   // Give Discord a moment to fully process bot's presence before registering commands.
   setTimeout(async () => {
@@ -494,7 +539,7 @@ web.get('/stats', (_, res) => {
     users: client.users.cache.size,
     uptime: process.uptime(),
     registeredUsers: Object.keys(discordLinks).length,
-    firestoreStatus: db ? 'Initialized' : 'Not Initialized',
+    firestoreStatus: firebaseInitialized ? 'Initialized' : 'Not Initialized',
     firebaseAuthId: auth?.currentUser?.uid || 'N/A'
   });
 });
@@ -502,9 +547,14 @@ const PORT = process.env.PORT || 8080; // Use environment variable PORT or defau
 web.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
 
 // --- Log in to Discord ---
-client.login(TOKEN).catch(err => {
-  console.error('❌ Failed to log in to Discord. Check your DISCORD_TOKEN in .env file!');
-  console.error('Error:', err.message);
-  process.exit(1); // Exit the process if login fails
-});
-
+console.log('🚀 Attempting to login to Discord...');
+client.login(TOKEN)
+  .then(() => {
+    console.log('✅ Discord login attempt successful');
+  })
+  .catch(err => {
+    console.error('❌ Failed to log in to Discord. Check your DISCORD_TOKEN in .env file!');
+    console.error('❌ Error details:', err.message);
+    console.error('❌ Error code:', err.code);
+    process.exit(1); // Exit the process if login fails
+  });
