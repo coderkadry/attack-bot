@@ -558,3 +558,5 @@ client.login(TOKEN)
     console.error('❌ Error code:', err.code);
     process.exit(1); // Exit the process if login fails
   });
+
+console.log('🧪 TOKEN Loaded:', !!TOKEN);
