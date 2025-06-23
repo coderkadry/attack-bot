@@ -169,7 +169,8 @@ async function getPlayerBalanceFromFirestore(robloxId) {
     console.error("Firestore not initialized yet!");
     return 0; // Or throw an error depending on desired behavior
   }
-  const balanceDocRef = doc(db, `artifacts/${appId}/public/data/robloxBalances`, String(robloxId));
+  // Changed collection name to 'roblox-balances' for consistency with Firebase setup
+  const balanceDocRef = doc(db, `artifacts/${appId}/public/data/roblox-balances`, String(robloxId));
   const balanceDocSnap = await getDoc(balanceDocRef);
   if (balanceDocSnap.exists()) {
     const data = balanceDocSnap.data();
@@ -184,7 +185,8 @@ async function updatePlayerBalanceInFirestore(robloxId, newBalance) {
     console.error("Firestore not initialized yet!");
     return; // Or throw an error
   }
-  const balanceDocRef = doc(db, `artifacts/${appId}/public/data/robloxBalances`, String(robloxId));
+  // Changed collection name to 'roblox-balances' for consistency with Firebase setup
+  const balanceDocRef = doc(db, `artifacts/${appId}/public/data/roblox-balances`, String(robloxId));
   await setDoc(balanceDocRef, { balance: newBalance }, { merge: true }); // Use merge to avoid overwriting other fields if any
 }
 
@@ -368,10 +370,10 @@ client.on('interactionCreate', async interaction => {
         debugResults.push(`✅ Firebase App Initialized`);
         debugResults.push(`✅ Firestore Connected`);
         debugResults.push(`✅ Authenticated User ID: ${auth.currentUser.uid}`);
-        debugResults.push(` Firestore path for balances: artifacts/${appId}/public/data/robloxBalances`);
+        debugResults.push(` Firestore path for balances: artifacts/${appId}/public/data/roblox-balances`);
         try {
           // Attempt a small read from Firestore to confirm connectivity
-          const testDocRef = doc(db, `artifacts/${appId}/public/data/robloxBalances`, 'test_read_123');
+          const testDocRef = doc(db, `artifacts/${appId}/public/data/roblox-balances`, 'test_read_123');
           await getDoc(testDocRef);
           debugResults.push(`✅ Firestore read test successful.`);
         } catch (err) {
