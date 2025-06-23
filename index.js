@@ -131,16 +131,118 @@ function createBasicCommands() {
         data: {
             name: 'ping',
             description: 'Replies with Pong!',
-            toJSON: () => ({ name: 'ping', description: 'Replies with Pong!' })
+            type: 1, // CHAT_INPUT
+            toJSON: () => ({ 
+                name: 'ping', 
+                description: 'Replies with Pong!',
+                type: 1
+            })
         },
         execute: async (interaction) => {
-            await interaction.reply('Pong!');
+            console.log('Executing ping command for user:', interaction.user.tag);
+            await interaction.reply('Pong! 🏓');
+        }
+    };
+
+    const registerCommand = {
+        data: {
+            name: 'register',
+            description: 'Link your Discord account to a Roblox ID',
+            type: 1,
+            options: [{
+                name: 'roblox_id',
+                description: 'Your Roblox User ID',
+                type: 3, // STRING
+                required: true
+            }],
+            toJSON: () => ({
+                name: 'register',
+                description: 'Link your Discord account to a Roblox ID',
+                type: 1,
+                options: [{
+                    name: 'roblox_id',
+                    description: 'Your Roblox User ID',
+                    type: 3,
+                    required: true
+                }]
+            })
+        },
+        execute: async (interaction) => {
+            console.log('Executing register command for user:', interaction.user.tag);
+            // This will be handled in the main interaction handler
+        }
+    };
+
+    const balCommand = {
+        data: {
+            name: 'bal',
+            description: 'Check your Roblox account balance',
+            type: 1,
+            toJSON: () => ({
+                name: 'bal',
+                description: 'Check your Roblox account balance',
+                type: 1
+            })
+        },
+        execute: async (interaction) => {
+            console.log('Executing bal command for user:', interaction.user.tag);
+            // This will be handled in the main interaction handler
+        }
+    };
+
+    const payCommand = {
+        data: {
+            name: 'pay',
+            description: 'Send coins to another user',
+            type: 1,
+            options: [
+                {
+                    name: 'recipient',
+                    description: 'The user to send coins to',
+                    type: 6, // USER
+                    required: true
+                },
+                {
+                    name: 'amount',
+                    description: 'Amount of coins to send',
+                    type: 10, // NUMBER
+                    required: true
+                }
+            ],
+            toJSON: () => ({
+                name: 'pay',
+                description: 'Send coins to another user',
+                type: 1,
+                options: [
+                    {
+                        name: 'recipient',
+                        description: 'The user to send coins to',
+                        type: 6,
+                        required: true
+                    },
+                    {
+                        name: 'amount',
+                        description: 'Amount of coins to send',
+                        type: 10,
+                        required: true
+                    }
+                ]
+            })
+        },
+        execute: async (interaction) => {
+            console.log('Executing pay command for user:', interaction.user.tag);
+            // This will be handled in the main interaction handler
         }
     };
     
-    client.commands.set('ping', pingCommand);
-    commands.push(pingCommand.data.toJSON());
-    console.log('✅ Created basic ping command');
+    // Add all commands
+    const basicCommands = [pingCommand, registerCommand, balCommand, payCommand];
+    
+    basicCommands.forEach(cmd => {
+        client.commands.set(cmd.data.name, cmd);
+        commands.push(cmd.data.toJSON());
+        console.log(`✅ Created basic command: ${cmd.data.name}`);
+    });
 }
 
 // --- Firebase Functions ---
@@ -245,57 +347,107 @@ async function updateUserBalance(robloxId, amount) {
 
 // --- Discord Bot Events ---
 client.once('ready', async () => {
-    console.log(`🤖 Bot logged in as ${client.user.tag}`);
+    console.log(`🤖 Bot logged in as ${client.user.tag} (ID: ${client.user.id})`);
     console.log(`🌐 Active in ${client.guilds.cache.size} servers`);
 
-    // Register slash commands
+    // Register slash commands with better error handling
     if (commands.length > 0) {
-        const rest = new REST().setToken(process.env.DISCORD_TOKEN);
+        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
         try {
-            console.log('📦 Registering slash commands...');
+            console.log(`📦 Registering ${commands.length} slash commands...`);
+            console.log('Commands to register:', commands.map(cmd => cmd.name));
+            
+            // Clear existing commands first
+            console.log('🧹 Clearing existing commands...');
+            await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
+            
+            // Wait a moment for Discord to process
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Register new commands
             const data = await rest.put(
                 Routes.applicationCommands(client.user.id),
                 { body: commands }
             );
-            console.log(`✅ Registered ${data.length} slash commands`);
+            
+            console.log(`✅ Successfully registered ${data.length} slash commands globally`);
+            console.log('Registered commands:', data.map(cmd => cmd.name));
+            console.log('⏰ Commands may take up to 1 hour to appear globally');
+            
         } catch (error) {
-            console.error('❌ Failed to register commands:', error.message);
+            console.error('❌ Failed to register commands:', error);
+            if (error.code === 50001) {
+                console.error('Missing Access - Check bot permissions');
+            } else if (error.code === 10002) {
+                console.error('Unknown Application - Check your bot token');
+            } else {
+                console.error('Full error:', error.rawError || error);
+            }
         }
+    } else {
+        console.log('⚠️ No commands to register');
     }
 
     // Load Firebase data
     await loadDiscordRobloxLinks();
     console.log('🎉 Bot setup complete!');
+    console.log('💡 If commands don\'t appear immediately, wait up to 1 hour for global registration');
 });
 
 client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
+    console.log(`📨 Received interaction: ${interaction.type} from ${interaction.user.tag}`);
+    
+    if (!interaction.isChatInputCommand()) {
+        console.log('Not a chat input command, ignoring');
+        return;
+    }
+
+    console.log(`🔧 Processing command: /${interaction.commandName}`);
 
     const command = client.commands.get(interaction.commandName);
-    if (!command) return;
+    if (!command) {
+        console.error(`❌ No command found for: ${interaction.commandName}`);
+        return await interaction.reply({
+            content: '❌ Command not found!',
+            ephemeral: true
+        });
+    }
 
     try {
         // Handle Firebase-dependent commands
         if (['register', 'bal', 'pay'].includes(interaction.commandName) && !db) {
-            return interaction.reply({ 
+            console.log('Firebase required but not available');
+            return await interaction.reply({ 
                 content: '❌ This command requires Firebase, which is not available.', 
                 ephemeral: true 
             });
         }
 
-        // Custom command handling
+        // Custom command handling with detailed logging
+        if (interaction.commandName === 'ping') {
+            console.log('Executing ping command');
+            return await interaction.reply({
+                content: 'Pong! 🏓 Bot is working correctly!',
+                ephemeral: false
+            });
+        }
+
         if (interaction.commandName === 'register') {
+            console.log('Executing register command');
+            
             const discordId = interaction.user.id;
             const robloxId = interaction.options.getString('roblox_id');
             
+            console.log(`Linking Discord ${discordId} to Roblox ${robloxId}`);
+            
             const success = await saveDiscordRobloxLink(discordId, robloxId);
             if (success) {
-                return interaction.reply({ 
-                    content: `✅ Linked Discord account to Roblox ID: ${robloxId}!`, 
+                return await interaction.reply({ 
+                    content: `✅ Successfully linked your Discord account to Roblox ID: ${robloxId}!`, 
                     ephemeral: true 
                 });
             } else {
-                return interaction.reply({ 
+                return await interaction.reply({ 
                     content: '❌ Failed to save link. Please try again later.', 
                     ephemeral: true 
                 });
@@ -303,30 +455,34 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.commandName === 'bal') {
+            console.log('Executing balance command');
+            
             const discordId = interaction.user.id;
             const linkedRobloxId = discordRobloxLinks[discordId];
 
             if (!linkedRobloxId) {
-                return interaction.reply({ 
-                    content: '❌ Not linked to a Roblox account. Use `/register` first.', 
+                return await interaction.reply({ 
+                    content: '❌ Your Discord account is not linked to a Roblox account. Use `/register <roblox_id>` first.', 
                     ephemeral: true 
                 });
             }
 
             const balance = await getUserBalance(linkedRobloxId);
-            return interaction.reply({ 
-                content: `💰 Balance (Roblox ID: ${linkedRobloxId}): ${balance} coins`, 
+            return await interaction.reply({ 
+                content: `💰 Your balance (Roblox ID: ${linkedRobloxId}): **${balance} coins**`, 
                 ephemeral: true 
             });
         }
 
         if (interaction.commandName === 'pay') {
+            console.log('Executing pay command');
+            
             const senderDiscordId = interaction.user.id;
             const senderRobloxId = discordRobloxLinks[senderDiscordId];
 
             if (!senderRobloxId) {
-                return interaction.reply({ 
-                    content: '❌ You must register first with `/register`.', 
+                return await interaction.reply({ 
+                    content: '❌ You must register your Roblox account first using `/register <roblox_id>`.', 
                     ephemeral: true 
                 });
             }
@@ -336,57 +492,74 @@ client.on('interactionCreate', async interaction => {
             const amount = interaction.options.getNumber('amount');
 
             if (amount <= 0) {
-                return interaction.reply({ 
-                    content: '❌ Amount must be positive.', 
+                return await interaction.reply({ 
+                    content: '❌ Amount must be a positive number.', 
                     ephemeral: true 
                 });
             }
 
             const receiverRobloxId = discordRobloxLinks[receiverDiscordId];
             if (!receiverRobloxId) {
-                return interaction.reply({ 
-                    content: `❌ ${receiverUser.tag} hasn't registered yet.`, 
+                return await interaction.reply({ 
+                    content: `❌ ${receiverUser.tag} hasn't linked their Roblox account yet. They need to use \`/register\` first.`, 
                     ephemeral: true 
+                });
+            }
+
+            if (senderDiscordId === receiverDiscordId) {
+                return await interaction.reply({
+                    content: '❌ You cannot send coins to yourself!',
+                    ephemeral: true
                 });
             }
 
             const senderBalance = await getUserBalance(senderRobloxId);
             if (senderBalance < amount) {
-                return interaction.reply({ 
-                    content: `❌ Insufficient balance! You have ${senderBalance} coins.`, 
+                return await interaction.reply({ 
+                    content: `❌ Insufficient balance! You have **${senderBalance} coins** but tried to send **${amount} coins**.`, 
                     ephemeral: true 
                 });
             }
+
+            // Defer reply for potentially long operation
+            await interaction.deferReply();
 
             const senderSuccess = await updateUserBalance(senderRobloxId, -amount);
             const receiverSuccess = await updateUserBalance(receiverRobloxId, amount);
 
             if (senderSuccess && receiverSuccess) {
-                return interaction.reply({ 
-                    content: `✅ Paid ${amount} coins to ${receiverUser.tag}. New balance: ${senderBalance - amount}`, 
-                    ephemeral: false 
+                return await interaction.editReply({ 
+                    content: `✅ Successfully sent **${amount} coins** to ${receiverUser.tag}!\nYour new balance: **${senderBalance - amount} coins**`
                 });
             } else {
                 // Attempt to revert on failure
                 if (senderSuccess) await updateUserBalance(senderRobloxId, amount);
                 if (receiverSuccess) await updateUserBalance(receiverRobloxId, -amount);
-                return interaction.reply({ 
-                    content: '❌ Payment failed. Please try again.', 
-                    ephemeral: true 
+                return await interaction.editReply({ 
+                    content: '❌ Payment failed due to a database error. Please try again later.'
                 });
             }
         }
 
         // Execute other commands
+        console.log(`Executing command via command.execute(): ${interaction.commandName}`);
         await command.execute(interaction);
-    } catch (error) {
-        console.error('Command execution error:', error.message);
-        const errorMessage = 'There was an error executing this command!';
         
-        if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: errorMessage, ephemeral: true });
-        } else {
-            await interaction.reply({ content: errorMessage, ephemeral: true });
+    } catch (error) {
+        console.error(`❌ Command execution error for /${interaction.commandName}:`, error);
+        
+        const errorMessage = `❌ There was an error executing the \`/${interaction.commandName}\` command!\n\`\`\`${error.message}\`\`\``;
+        
+        try {
+            if (interaction.deferred) {
+                await interaction.editReply({ content: errorMessage });
+            } else if (interaction.replied) {
+                await interaction.followUp({ content: errorMessage, ephemeral: true });
+            } else {
+                await interaction.reply({ content: errorMessage, ephemeral: true });
+            }
+        } catch (replyError) {
+            console.error('Failed to send error message:', replyError);
         }
     }
 });
