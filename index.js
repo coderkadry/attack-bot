@@ -13,7 +13,6 @@ import path from 'path';
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = '1386338165916438538';
-const GUILD_ID = '1380367982986793010';
 const API_BASE = 'https://attack-roblox-api-135053415446.europe-west3.run.app';
 
 // Local storage for Discord-Roblox links (since API doesn't have registration)
@@ -58,22 +57,37 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName('pay')
+    .setDescription('💸 Pay Robux to another Roblox user')
+    .addStringOption(option =>
+      option.setName('userid')
+        .setDescription('Recipient Roblox UserId')
+        .setRequired(true)
+    )
+    .addIntegerOption(option =>
+      option.setName('amount')
+        .setDescription('Amount to pay')
+        .setRequired(true)
+        .setMinValue(1)
+    ),
+
+  new SlashCommandBuilder()
     .setName('debug')
     .setDescription('🔧 Debug API endpoints'),
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-async function registerCommands() {
+async function registerGlobalCommands() {
   try {
-    console.log('📦 Registering commands...');
+    console.log('📦 Registering global commands...');
     await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+      Routes.applicationCommands(CLIENT_ID),
       { body: commands }
     );
-    console.log('✅ Slash commands registered!');
+    console.log('✅ Global slash commands registered!');
   } catch (err) {
-    console.error('❌ Command registration failed:', err.message);
+    console.error('❌ Global command registration failed:', err.message);
   }
 }
 
@@ -113,8 +127,8 @@ client.on('interactionCreate', async interaction => {
           const embed = new EmbedBuilder()
             .setColor(0xFFAA00)
             .setTitle('⚠️ User not found in system')
-            .setDescription(`Your linked Roblox ID **${linkedRobloxId}** was not found in the balance system.\n\nThis means you're registered locally but don't have a balance record yet.\n\n**Starting Balance: 0**`)
-            .setFooter({ text: 'Contact an admin to add you to the balance system.' });
+            .setDescription(`Your linked Roblox ID **${linkedRobloxId}** was not found in the balance system.\n\nContact an admin to add you to the balance system.`)
+            .setFooter({ text: 'Starting Balance: 0' });
           return await interaction.editReply({ embeds: [embed] });
         }
         throw new Error(`Balance API error: ${balRes.status} - ${balText}`);
@@ -134,6 +148,103 @@ client.on('interactionCreate', async interaction => {
       await interaction.editReply({ embeds: [embed] });
     }
 
+    if (command === 'pay') {
+      console.log(`💸 Pay command initiated by Discord ID: ${discordId}`);
+      
+      // Check if user is registered
+      const senderRobloxId = discordLinks[discordId];
+      
+      if (!senderRobloxId) {
+        const embed = new EmbedBuilder()
+          .setColor(0xFF0000)
+          .setTitle('❌ You are not registered')
+          .setDescription('Use `/register <your_roblox_id>` to link your Roblox account first.');
+        return await interaction.editReply({ embeds: [embed] });
+      }
+
+      const recipientUserId = interaction.options.getString('userid');
+      const amount = interaction.options.getInteger('amount');
+
+      // Validate recipient Roblox ID format
+      if (!/^\d+$/.test(recipientUserId)) {
+        const embed = new EmbedBuilder()
+          .setColor(0xFF0000)
+          .setTitle('❌ Invalid Recipient Roblox ID')
+          .setDescription('Roblox ID should contain only numbers.\n\nExample: `5818937005`');
+        return await interaction.editReply({ embeds: [embed] });
+      }
+
+      // Check if trying to pay themselves
+      if (senderRobloxId === recipientUserId) {
+        const embed = new EmbedBuilder()
+          .setColor(0xFF0000)
+          .setTitle('❌ Cannot pay yourself')
+          .setDescription('You cannot send money to your own account.');
+        return await interaction.editReply({ embeds: [embed] });
+      }
+
+      console.log(`💸 Processing payment: ${senderRobloxId} -> ${recipientUserId} (${amount})`);
+
+      // Call the pay API endpoint
+      try {
+        const payRes = await fetch(`${API_BASE}/pay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fromUserId: senderRobloxId,
+            toUserId: recipientUserId,
+            amount: amount
+          })
+        });
+
+        const payText = await payRes.text();
+        console.log(`💸 Pay API Response: ${payRes.status} - ${payText}`);
+
+        if (!payRes.ok) {
+          let errorMessage = 'Payment failed';
+          
+          if (payRes.status === 400) {
+            errorMessage = 'Insufficient balance or invalid request';
+          } else if (payRes.status === 404) {
+            errorMessage = 'Sender or recipient not found in the system';
+          } else if (payRes.status === 500) {
+            errorMessage = 'Server error occurred';
+          }
+
+          const embed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('❌ Payment Failed')
+            .setDescription(`${errorMessage}\n\nDetails: ${payText}`)
+            .setFooter({ text: 'Please try again or contact support.' });
+          return await interaction.editReply({ embeds: [embed] });
+        }
+
+        const payData = JSON.parse(payText);
+        
+        const embed = new EmbedBuilder()
+          .setColor(0x00FF99)
+          .setTitle('✅ Payment Successful!')
+          .setDescription(
+            `**Amount:** ${amount}\n` +
+            `**To:** ${recipientUserId}\n` +
+            `**From:** ${senderRobloxId}\n\n` +
+            `Transaction completed successfully!`
+          )
+          .setFooter({ text: 'Use /bal to check your updated balance.' });
+
+        await interaction.editReply({ embeds: [embed] });
+
+      } catch (err) {
+        console.error('💸 Payment error:', err.message);
+        const embed = new EmbedBuilder()
+          .setColor(0xFF0000)
+          .setTitle('❌ Payment Error')
+          .setDescription(`Failed to process payment: ${err.message}`)
+          .setFooter({ text: 'Please try again later.' });
+        return await interaction.editReply({ embeds: [embed] });
+      }
+    }
+
     if (command === 'debug') {
       console.log('🔧 Running API debug...');
       
@@ -147,16 +258,12 @@ client.on('interactionCreate', async interaction => {
         debugResults.push(`❌ API Base unreachable: ${err.message}`);
       }
       
-      // Test 2: Check available endpoints (these are the ones from your original code's debug)
+      // Test 2: Check available endpoints
       const testEndpoints = [
-        '/register', // These are likely NOT active or properly implemented on your API
-        '/link',     // These are likely NOT active or properly implemented on your API
-        '/create-user', // These are likely NOT active or properly implemented on your API
-        '/add-user',    // These are likely NOT active or properly implemented on your API
         '/users',
         '/health',
         '/status',
-        '/get-balance/123' // Example for get-balance
+        '/get-balance/123'
       ];
       
       for (const endpoint of testEndpoints) {
@@ -167,22 +274,6 @@ client.on('interactionCreate', async interaction => {
           debugResults.push(`📡 GET ${endpoint}: ${testRes.status}`);
         } catch (err) {
           debugResults.push(`❌ GET ${endpoint}: ${err.message}`);
-        }
-      }
-      
-      // Test 3: Try POST to different endpoints (these are the ones from your original code's debug)
-      const testData = { discordId: '123', robloxId: '456' };
-      for (const endpoint of ['/register', '/link', '/create-user', '/add-user']) { // Added '/add-user' here for completeness
-        try {
-          const testRes = await fetch(`${API_BASE}${endpoint}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(testData)
-          });
-          const responseText = await testRes.text();
-          debugResults.push(`📤 POST ${endpoint}: ${testRes.status} - ${responseText.substring(0, 100)}`);
-        } catch (err) {
-          debugResults.push(`❌ POST ${endpoint}: ${err.message}`);
         }
       }
       
@@ -217,45 +308,12 @@ client.on('interactionCreate', async interaction => {
       
       console.log(`✅ Successfully linked Discord ${discordId} to Roblox ${userId} locally.`);
 
-      let userExistsInSystem = false;
-      let currentBalance = 0;
-      let apiRegistrationMessage = "";
-
-      // **NEW STEP: Attempt to register/ensure user in API balance system**
-      try {
-        const ensureUserRes = await fetch(`${API_BASE}/ensure-user-balance`, { // <--- Call your new API endpoint
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ robloxId: userId })
-        });
-
-        const ensureUserText = await ensureUserRes.text();
-        console.log(`API ensure-user-balance response: ${ensureUserRes.status} - ${ensureUserText}`);
-
-        if (ensureUserRes.ok) {
-            const ensureUserData = JSON.parse(ensureUserText);
-            userExistsInSystem = true;
-            currentBalance = ensureUserData.balance || 0;
-            apiRegistrationMessage = ensureUserData.message || "User status updated in API.";
-        } else {
-            apiRegistrationMessage = `Failed to update user status in API: ${ensureUserRes.status} - ${ensureUserText.substring(0, 100)}`;
-            console.error(`API ensure-user-balance error: ${apiRegistrationMessage}`);
-        }
-      } catch (err) {
-        apiRegistrationMessage = `Error contacting API for user balance system: ${err.message}`;
-        console.error(`Error contacting API for ensure-user-balance: ${err.message}`);
-      }
-
       const embed = new EmbedBuilder()
         .setColor(0x00AAFF)
         .setTitle('✅ Registration Successful!')
         .setDescription(
           `Your Discord account has been linked to Roblox ID: **${userId}**\n\n` +
-          (userExistsInSystem ?
-            `🎉 **Current Balance:** ${currentBalance}\n*${apiRegistrationMessage}*` :
-            `⚠️ **Status:** Not in balance system yet (or initial creation failed)\n**Starting Balance:** 0\n\n*${apiRegistrationMessage}*`
-          ) +
-          `\n\nYou can now use \`/bal\` to check your balance!`
+          `You can now use \`/bal\` to check your balance!`
         )
         .setFooter({ text: 'You can re-register anytime to change your linked ID.' });
 
@@ -282,12 +340,29 @@ client.on('interactionCreate', async interaction => {
 
 client.once('ready', () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-  registerCommands();
+  console.log(`🌐 Bot is active in ${client.guilds.cache.size} servers`);
+  registerGlobalCommands();
+});
+
+// Handle guild join events
+client.on('guildCreate', guild => {
+  console.log(`🎉 Joined new server: ${guild.name} (${guild.id})`);
+});
+
+client.on('guildDelete', guild => {
+  console.log(`👋 Left server: ${guild.name} (${guild.id})`);
 });
 
 const web = express();
-web.get('/', (_, res) => res.send('🤖 Bot is running!'));
+web.get('/', (_, res) => res.send('🤖 Bot is running globally!'));
+web.get('/stats', (_, res) => {
+  res.json({
+    servers: client.guilds.cache.size,
+    users: client.users.cache.size,
+    uptime: process.uptime(),
+    registeredUsers: Object.keys(discordLinks).length
+  });
+});
 web.listen(8080, () => console.log('🌐 Web server running on port 8080'));
 
 client.login(TOKEN);
-
