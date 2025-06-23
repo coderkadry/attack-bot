@@ -10,6 +10,7 @@ import {
   EmbedBuilder,
 } from 'discord.js';
 import express from 'express';
+const app = express();
 import fetch from 'node-fetch';
 import fs from 'fs';
 import path from 'path';
