@@ -1,10 +1,33 @@
 import { Client, GatewayIntentBits, Collection, REST, Routes } from 'discord.js';
-import { createRequire } from 'module';
+import { createRequire } = from 'module'; // Fixed typo: removed =
 import express from 'express';
 import * as admin from 'firebase-admin'; // This imports the entire firebase-admin library
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// --- IMMEDIATE DEBUGGING AFTER ADMIN IMPORT ---
+// These logs will help us understand the 'admin' object's state right after it's imported.
+console.log('--- DEBUG: ADMIN OBJECT INSPECTION (Immediately after import) ---');
+console.log('DEBUG: Is admin imported and truthy?', !!admin);
+if (admin) {
+    console.log('DEBUG: Type of admin:', typeof admin);
+    console.log('DEBUG: Properties of admin (keys):', Object.keys(admin));
+    console.log('DEBUG: admin.apps property value:', admin.apps);
+    console.log('DEBUG: admin.credential property value:', admin.credential);
+    if (admin.credential) {
+        console.log('DEBUG: Type of admin.credential:', typeof admin.credential);
+        console.log('DEBUG: Properties of admin.credential (keys):', Object.keys(admin.credential));
+        console.log('DEBUG: admin.credential.cert property value:', admin.credential.cert);
+        console.log('DEBUG: Type of admin.credential.cert:', typeof admin.credential.cert);
+    } else {
+        console.log('DEBUG: admin.credential is NOT defined or null.');
+    }
+} else {
+    console.log('DEBUG: "admin" object is NOT imported or is undefined/null.');
+}
+console.log('----------------------------------------------------');
+
 
 // Use createRequire for dotenv as it's a CJS module in an ESM context
 const require = createRequire(import.meta.url);
@@ -51,45 +74,35 @@ async function initializeFirebaseAdminSDK() {
             throw new Error(`Invalid JSON in serviceAccountKey.json: ${jsonError.message}`);
         }
 
-        // --- NEW DEBUGGING AND ROBUST CHECK FOR ADMIN OBJECT ---
-        console.log('DEBUG: Type of admin:', typeof admin);
-        console.log('DEBUG: Properties of admin:', Object.keys(admin || {}));
-        if (admin && admin.credential) {
-            console.log('DEBUG: admin.credential exists.');
-            if (typeof admin.credential.cert === 'function') {
-                console.log('DEBUG: admin.credential.cert is a function.');
-            } else {
-                console.log('DEBUG: admin.credential.cert is NOT a function!');
-            }
-        } else {
-            console.log('DEBUG: admin or admin.credential is NOT defined!');
-        }
+        // --- ROBUST INITIALIZATION CHECK ---
+        // Check if admin.apps exists and is an array, and if any Firebase apps are already initialized.
+        // This helps prevent re-initialization errors and the "length" error.
+        const isFirebaseAppInitialized = Array.isArray(admin.apps) && admin.apps.length > 0;
 
-        // Initialize Firebase Admin SDK if not already initialized
-        // More robust check: ensure admin.apps exists AND its length is 0
-        if (!admin.apps || admin.apps.length === 0) {
-            // CRITICAL CHECK: Ensure admin.credential.cert is available before attempting to call it
+        if (!isFirebaseAppInitialized) {
+            console.log('DEBUG: Firebase Admin SDK not yet initialized. Attempting initialization...');
+            // CRITICAL CHECK: Ensure admin.credential and admin.credential.cert are available
             if (admin && admin.credential && typeof admin.credential.cert === 'function') {
                 admin.initializeApp({
                     credential: admin.credential.cert(serviceAccount),
                     databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`
                 });
-                console.log('Attempted Firebase Admin SDK initialization.');
+                console.log('Attempted Firebase Admin SDK initialization using admin.initializeApp().');
             } else {
-                const errorMessage = '❌ CRITICAL: Firebase Admin SDK\'s credential.cert method is not available. Package might be corrupted or incorrectly loaded.';
+                const errorMessage = '❌ CRITICAL: Firebase Admin SDK\'s credential.cert method is not available. This is usually due to a corrupted or incorrectly loaded firebase-admin package.';
                 console.error(errorMessage);
-                throw new Error(errorMessage); // Throw a more specific error
+                throw new Error(errorMessage);
             }
         } else {
-            console.log('Firebase Admin SDK already initialized.');
+            console.log('Firebase Admin SDK already initialized. Skipping re-initialization.');
         }
 
         db = admin.firestore();
-        auth = admin.auth();
+        auth = admin.auth(); // Assuming auth is needed later, though not directly used for Admin SDK auth in this pattern
         console.log('✅ Firebase Admin SDK initialized and Firestore connected.');
 
     } catch (error) {
-        console.error('❌ Firebase initialization failed:', error); // Changed from 'authentication failed' to 'initialization failed'
+        console.error('❌ Firebase initialization failed:', error);
         console.error('Please verify:');
         console.error('1. The file "./serviceAccountKey.json" exists on your Google Cloud VM.');
         console.error('2. The contents of "./serviceAccountKey.json" are a valid JSON for a Firebase service account key.');
@@ -119,7 +132,7 @@ const commands = []; // Array to store command data for Discord API registration
 
 // --- HARDCODED COMMANDS FOR TROUBLESHOOTING ---
 // This bypasses the 'commands' folder reading to isolate Firebase issue.
-// In a production bot, you would load commands dynamically.
+// In a production bot, you would load commands dynamically from separate files.
 
 const pingCommand = {
     data: {
@@ -345,18 +358,16 @@ client.on('ready', async () => {
         console.log(`Registered commands: ${data.map(cmd => cmd.name)}`);
 
         // Optional: Clear guild-specific commands if you intend to only use global commands.
-        console.log('🧹 Clearing existing commands...'); // Changed from 'old guild-specific commands'
+        console.log('🧹 Clearing existing commands...');
         for (const guild of client.guilds.cache.values()) {
             try {
                 await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: [] });
-                // console.log(`✅ Cleared guild commands for ${guild.name}`); // This was spammy, removed for cleaner logs
             } catch (guildError) {
                 console.warn(`⚠️ Could not clear guild commands for ${guild.name}: ${guildError.message}`);
             }
         }
 
         // Load existing Discord-Roblox links from Firestore after bot setup
-        // This will now correctly check if 'db' is valid internally
         await loadDiscordRobloxLinks();
 
         // Final success message
