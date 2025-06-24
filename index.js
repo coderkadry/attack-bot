@@ -1,5 +1,5 @@
 import { Client, GatewayIntentBits, Collection, REST, Routes } from 'discord.js';
-import { createRequire } = from 'module'; // Fixed typo: removed =
+import { createRequire } from 'module'; // Corrected typo: removed extra '='
 import express from 'express';
 import * as admin from 'firebase-admin'; // This imports the entire firebase-admin library
 import fs from 'node:fs';
@@ -13,12 +13,12 @@ console.log('DEBUG: Is admin imported and truthy?', !!admin);
 if (admin) {
     console.log('DEBUG: Type of admin:', typeof admin);
     console.log('DEBUG: Properties of admin (keys):', Object.keys(admin));
-    console.log('DEBUG: admin.apps property value:', admin.apps);
-    console.log('DEBUG: admin.credential property value:', admin.credential);
+    console.log('DEBUG: admin.apps property value:', admin.apps); // Should be an array or undefined
+    console.log('DEBUG: admin.credential property value:', admin.credential); // Should be an object or undefined
     if (admin.credential) {
         console.log('DEBUG: Type of admin.credential:', typeof admin.credential);
         console.log('DEBUG: Properties of admin.credential (keys):', Object.keys(admin.credential));
-        console.log('DEBUG: admin.credential.cert property value:', admin.credential.cert);
+        console.log('DEBUG: admin.credential.cert property value:', admin.credential.cert); // Should be a function or undefined
         console.log('DEBUG: Type of admin.credential.cert:', typeof admin.credential.cert);
     } else {
         console.log('DEBUG: admin.credential is NOT defined or null.');
@@ -294,7 +294,7 @@ async function getUserBalance(robloxId) {
             return doc.data().balance || 0;
         }
         return 0;
-    } catch (error) {
+    } = (error) => {
         console.error('Error getting user balance from Firestore:', error);
         return 0;
     }
