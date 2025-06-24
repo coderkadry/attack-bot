@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits, Collection, REST, Routes } from 'discord.js';
 import { createRequire } from 'module';
 import express from 'express';
-import * as admin from 'firebase-admin';
+import * as admin from 'firebase-admin'; // This imports the entire firebase-admin library
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,39 +16,72 @@ let auth; // Firebase authentication instance
 
 /**
  * Initializes the Firebase Admin SDK and connects to Firestore.
+ * This function attempts to read the service account key, parse it,
+ * and set up the Firebase app.
  */
 async function initializeFirebaseAdminSDK() {
     console.log('🔥 Starting Firebase initialization...');
     try {
+        // Determine the correct path to serviceAccountKey.json
         const __filename = fileURLToPath(import.meta.url);
         const __dirname = path.dirname(__filename);
         const serviceAccountPath = path.resolve(__dirname, './serviceAccountKey.json');
 
         console.log(`Attempting to read service account key from: ${serviceAccountPath}`);
 
+        // Check if the service account key file exists
         if (!fs.existsSync(serviceAccountPath)) {
-            console.warn(`⚠️ Warning: serviceAccountKey.json not found at ${serviceAccountPath}`);
-            console.log('Firebase features will be disabled. Bot will continue without Firebase.');
-            return;
+            console.error(`❌ Error: serviceAccountKey.json not found at ${serviceAccountPath}`);
+            throw new Error('Service account key file not found. Please ensure it exists in the bot\'s root directory.');
         }
 
+        // Read the service account key file content
         const serviceAccountContent = fs.readFileSync(serviceAccountPath, 'utf8');
+        console.log('Successfully read service account key file content.');
+
+        // Attempt to parse the JSON content
         let serviceAccount;
-        
         try {
             serviceAccount = JSON.parse(serviceAccountContent);
             console.log('Successfully parsed service account key JSON.');
-            console.log(`Service Account Project ID: "${serviceAccount.project_id}"`);
+            console.log(`Service Account Project ID found: "${serviceAccount.project_id}"`);
+            console.log(`Service Account client_email: "${serviceAccount.client_email}"`);
         } catch (jsonError) {
             console.error('❌ Error parsing service account key JSON:', jsonError);
             throw new Error(`Invalid JSON in serviceAccountKey.json: ${jsonError.message}`);
         }
 
-        if (!admin.apps.length) {
-            admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount),
-                databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`
-            });
+        // --- NEW DEBUGGING AND ROBUST CHECK FOR ADMIN OBJECT ---
+        console.log('DEBUG: Type of admin:', typeof admin);
+        console.log('DEBUG: Properties of admin:', Object.keys(admin || {}));
+        if (admin && admin.credential) {
+            console.log('DEBUG: admin.credential exists.');
+            if (typeof admin.credential.cert === 'function') {
+                console.log('DEBUG: admin.credential.cert is a function.');
+            } else {
+                console.log('DEBUG: admin.credential.cert is NOT a function!');
+            }
+        } else {
+            console.log('DEBUG: admin or admin.credential is NOT defined!');
+        }
+
+        // Initialize Firebase Admin SDK if not already initialized
+        // More robust check: ensure admin.apps exists AND its length is 0
+        if (!admin.apps || admin.apps.length === 0) {
+            // CRITICAL CHECK: Ensure admin.credential.cert is available before attempting to call it
+            if (admin && admin.credential && typeof admin.credential.cert === 'function') {
+                admin.initializeApp({
+                    credential: admin.credential.cert(serviceAccount),
+                    databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`
+                });
+                console.log('Attempted Firebase Admin SDK initialization.');
+            } else {
+                const errorMessage = '❌ CRITICAL: Firebase Admin SDK\'s credential.cert method is not available. Package might be corrupted or incorrectly loaded.';
+                console.error(errorMessage);
+                throw new Error(errorMessage); // Throw a more specific error
+            }
+        } else {
+            console.log('Firebase Admin SDK already initialized.');
         }
 
         db = admin.firestore();
@@ -56,16 +89,22 @@ async function initializeFirebaseAdminSDK() {
         console.log('✅ Firebase Admin SDK initialized and Firestore connected.');
 
     } catch (error) {
-        console.error('❌ Firebase initialization failed:', error.message);
-        console.log('Bot will continue without Firebase features.');
-        db = null;
-        auth = null;
+        console.error('❌ Firebase initialization failed:', error); // Changed from 'authentication failed' to 'initialization failed'
+        console.error('Please verify:');
+        console.error('1. The file "./serviceAccountKey.json" exists on your Google Cloud VM.');
+        console.error('2. The contents of "./serviceAccountKey.json" are a valid JSON for a Firebase service account key.');
+        console.error('3. That JSON file contains a field named "project_id".');
+        console.error('Full error stack:', error);
+        db = null; // Ensure db is null if initialization fails
+        auth = null; // Ensure auth is null if initialization fails
     }
 }
 
-// --- Discord Bot Setup ---
-console.log('🤖 Setting up Discord client...');
+// Immediately attempt to initialize Firebase when the bot starts
+await initializeFirebaseAdminSDK();
 
+
+// --- Discord Bot Setup ---
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -75,182 +114,99 @@ const client = new Client({
     ],
 });
 
-// Create a collection to hold bot commands
 client.commands = new Collection();
-const commands = [];
+const commands = []; // Array to store command data for Discord API registration
 
-// Load commands function
-async function loadCommands() {
-    try {
-        const __filename = fileURLToPath(import.meta.url);
-        const __dirname = path.dirname(__filename);
-        const foldersPath = path.join(__dirname, 'commands');
-        
-        // Check if commands folder exists
-        if (!fs.existsSync(foldersPath)) {
-            console.log('📁 No commands folder found. Creating basic commands...');
-            // Create basic commands if folder doesn't exist
-            createBasicCommands();
-            return;
-        }
+// --- HARDCODED COMMANDS FOR TROUBLESHOOTING ---
+// This bypasses the 'commands' folder reading to isolate Firebase issue.
+// In a production bot, you would load commands dynamically.
 
-        const commandFolders = fs.readdirSync(foldersPath);
-        
-        for (const folder of commandFolders) {
-            const commandsPath = path.join(foldersPath, folder);
-            if (!fs.statSync(commandsPath).isDirectory()) continue;
-            
-            const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
-            
-            for (const file of commandFiles) {
-                const filePath = path.join(commandsPath, file);
-                try {
-                    const command = await import(filePath);
-                    if ('data' in command && 'execute' in command) {
-                        client.commands.set(command.data.name, command);
-                        commands.push(command.data.toJSON());
-                        console.log(`✅ Loaded command: ${command.data.name}`);
-                    } else {
-                        console.log(`⚠️ Command at ${filePath} is missing required properties.`);
-                    }
-                } catch (error) {
-                    console.error(`❌ Failed to load command from ${filePath}:`, error.message);
-                }
-            }
-        }
-        console.log(`📦 Loaded ${commands.length} commands total.`);
-    } catch (error) {
-        console.error('❌ Error loading commands:', error.message);
-        console.log('Bot will continue with basic functionality.');
-    }
-}
+const pingCommand = {
+    data: {
+        name: 'ping',
+        description: 'Replies with Pong!',
+        type: 1, // CHAT_INPUT
+    },
+    async execute(interaction) {
+        await interaction.reply({ content: 'Pong!', ephemeral: true });
+    },
+};
 
-// Create basic commands if no commands folder exists
-function createBasicCommands() {
-    const pingCommand = {
-        data: {
-            name: 'ping',
-            description: 'Replies with Pong!',
-            type: 1, // CHAT_INPUT
-            toJSON: () => ({ 
-                name: 'ping', 
-                description: 'Replies with Pong!',
-                type: 1
-            })
-        },
-        execute: async (interaction) => {
-            console.log('Executing ping command for user:', interaction.user.tag);
-            await interaction.reply('Pong! 🏓');
-        }
-    };
+const registerCommand = {
+    data: {
+        name: 'register',
+        description: 'Links your Discord account to a Roblox ID.',
+        options: [{
+            name: 'roblox_id',
+            type: 3, // STRING
+            description: 'Your Roblox ID',
+            required: true,
+        }],
+        type: 1, // CHAT_INPUT
+    },
+    async execute(interaction) {
+        // Logic handled in interactionCreate event listener
+    },
+};
 
-    const registerCommand = {
-        data: {
-            name: 'register',
-            description: 'Link your Discord account to a Roblox ID',
-            type: 1,
-            options: [{
-                name: 'roblox_id',
-                description: 'Your Roblox User ID',
-                type: 3, // STRING
-                required: true
-            }],
-            toJSON: () => ({
-                name: 'register',
-                description: 'Link your Discord account to a Roblox ID',
-                type: 1,
-                options: [{
-                    name: 'roblox_id',
-                    description: 'Your Roblox User ID',
-                    type: 3,
-                    required: true
-                }]
-            })
-        },
-        execute: async (interaction) => {
-            console.log('Executing register command for user:', interaction.user.tag);
-            // This will be handled in the main interaction handler
-        }
-    };
+const balCommand = {
+    data: {
+        name: 'bal',
+        description: 'Checks your linked Roblox balance.',
+        type: 1, // CHAT_INPUT
+    },
+    async execute(interaction) {
+        // Logic handled in interactionCreate event listener
+    },
+};
 
-    const balCommand = {
-        data: {
-            name: 'bal',
-            description: 'Check your Roblox account balance',
-            type: 1,
-            toJSON: () => ({
-                name: 'bal',
-                description: 'Check your Roblox account balance',
-                type: 1
-            })
-        },
-        execute: async (interaction) => {
-            console.log('Executing bal command for user:', interaction.user.tag);
-            // This will be handled in the main interaction handler
-        }
-    };
+const payCommand = {
+    data: {
+        name: 'pay',
+        description: 'Pays a user from your Roblox balance.',
+        options: [
+            {
+                name: 'recipient',
+                type: 6, // USER
+                description: 'The Discord user to pay.',
+                required: true,
+            },
+            {
+                name: 'amount',
+                type: 10, // NUMBER
+                description: 'The amount to pay.',
+                required: true,
+            },
+        ],
+        type: 1, // CHAT_INPUT
+    },
+    async execute(interaction) {
+        // Logic handled in interactionCreate event listener
+    },
+};
 
-    const payCommand = {
-        data: {
-            name: 'pay',
-            description: 'Send coins to another user',
-            type: 1,
-            options: [
-                {
-                    name: 'recipient',
-                    description: 'The user to send coins to',
-                    type: 6, // USER
-                    required: true
-                },
-                {
-                    name: 'amount',
-                    description: 'Amount of coins to send',
-                    type: 10, // NUMBER
-                    required: true
-                }
-            ],
-            toJSON: () => ({
-                name: 'pay',
-                description: 'Send coins to another user',
-                type: 1,
-                options: [
-                    {
-                        name: 'recipient',
-                        description: 'The user to send coins to',
-                        type: 6,
-                        required: true
-                    },
-                    {
-                        name: 'amount',
-                        description: 'Amount of coins to send',
-                        type: 10,
-                        required: true
-                    }
-                ]
-            })
-        },
-        execute: async (interaction) => {
-            console.log('Executing pay command for user:', interaction.user.tag);
-            // This will be handled in the main interaction handler
-        }
-    };
-    
-    // Add all commands
-    const basicCommands = [pingCommand, registerCommand, balCommand, payCommand];
-    
-    basicCommands.forEach(cmd => {
-        client.commands.set(cmd.data.name, cmd);
-        commands.push(cmd.data.toJSON());
-        console.log(`✅ Created basic command: ${cmd.data.name}`);
-    });
-}
+// Add these hardcoded commands to the bot's collection and for registration
+client.commands.set(pingCommand.data.name, pingCommand);
+commands.push(pingCommand.data.toJSON());
 
-// --- Firebase Functions ---
-let discordRobloxLinks = {};
+client.commands.set(registerCommand.data.name, registerCommand);
+commands.push(registerCommand.data.toJSON());
 
+client.commands.set(balCommand.data.name, balCommand);
+commands.push(balCommand.data.toJSON());
+
+client.commands.set(payCommand.data.name, payCommand);
+commands.push(payCommand.data.toJSON());
+
+// --- Firebase Firestore Functions (integrated for simplicity) ---
+let discordRobloxLinks = {}; // Local cache for Discord-Roblox links
+
+/**
+ * Loads Discord-Roblox links from Firestore into local cache.
+ */
 async function loadDiscordRobloxLinks() {
-    if (!db) {
-        console.log('⚠️ Firebase not initialized. Skipping Discord-Roblox links load.');
+    if (!db || typeof db.collection !== 'function') { // Check if db is valid before using
+        console.log('⚠️ Firebase not initialized or db object is invalid. Cannot load Discord-Roblox links.');
         return;
     }
     try {
@@ -262,10 +218,10 @@ async function loadDiscordRobloxLinks() {
 
         const snapshot = await linksCollectionRef.get();
         if (snapshot.empty) {
-            console.log('No existing Discord-Roblox links found.');
+            console.log('No existing Discord-Roblox links found in Firestore.');
+            discordRobloxLinks = {};
             return;
         }
-        
         const links = {};
         snapshot.forEach(doc => {
             links[doc.id] = doc.data().robloxId;
@@ -273,14 +229,20 @@ async function loadDiscordRobloxLinks() {
         discordRobloxLinks = links;
         console.log(`🔗 Loaded ${Object.keys(discordRobloxLinks).length} Discord-Roblox links.`);
     } catch (error) {
-        console.error('Error loading Discord-Roblox links:', error.message);
+        console.error('Error loading Discord-Roblox links from Firestore:', error);
+        discordRobloxLinks = {};
     }
 }
 
+/**
+ * Saves a Discord-Roblox link to Firestore.
+ * @param {string} discordId - The Discord user's ID.
+ * @param {string} robloxId - The Roblox user's ID.
+ */
 async function saveDiscordRobloxLink(discordId, robloxId) {
-    if (!db) {
-        console.error('Firebase not initialized. Cannot save link.');
-        return false;
+    if (!db || typeof db.collection !== 'function') {
+        console.error('Firebase not initialized. Cannot save Discord-Roblox link.');
+        return;
     }
     try {
         const linksCollectionRef = db.collection('artifacts')
@@ -288,19 +250,24 @@ async function saveDiscordRobloxLink(discordId, robloxId) {
             .collection('public')
             .doc('data')
             .collection('discordRobloxLinks');
-        
         await linksCollectionRef.doc(discordId).set({ robloxId });
         discordRobloxLinks[discordId] = robloxId;
         console.log('🔗 Discord-Roblox link saved successfully.');
-        return true;
     } catch (error) {
-        console.error('Error saving Discord-Roblox link:', error.message);
-        return false;
+        console.error('Error saving Discord-Roblox link to Firestore:', error);
     }
 }
 
+/**
+ * Retrieves a user's balance from Firestore.
+ * @param {string} robloxId - The Roblox user's ID.
+ * @returns {Promise<number>} The user's balance, or 0 if not found/error.
+ */
 async function getUserBalance(robloxId) {
-    if (!db) return 0;
+    if (!db || typeof db.collection !== 'function') {
+        console.error('Firebase not initialized. Cannot get user balance.');
+        return 0;
+    }
     try {
         const userDocRef = db.collection('artifacts')
             .doc(process.env.APP_ID || 'default-app-id')
@@ -310,15 +277,27 @@ async function getUserBalance(robloxId) {
             .doc(String(robloxId));
 
         const doc = await userDocRef.get();
-        return doc.exists ? doc.data().balance || 0 : 0;
+        if (doc.exists) {
+            return doc.data().balance || 0;
+        }
+        return 0;
     } catch (error) {
-        console.error('Error getting user balance:', error.message);
+        console.error('Error getting user balance from Firestore:', error);
         return 0;
     }
 }
 
+/**
+ * Updates a user's balance in Firestore using a transaction for consistency.
+ * @param {string} robloxId - The Roblox user's ID.
+ * @param {number} amount - The amount to add (positive for add, negative for subtract).
+ * @returns {Promise<boolean>} True if update successful, false otherwise.
+ */
 async function updateUserBalance(robloxId, amount) {
-    if (!db) return false;
+    if (!db || typeof db.collection !== 'function') {
+        console.error('Firebase not initialized. Cannot update user balance.');
+        return false;
+    }
     try {
         const userDocRef = db.collection('artifacts')
             .doc(process.env.APP_ID || 'default-app-id')
@@ -340,151 +319,105 @@ async function updateUserBalance(robloxId, amount) {
         });
         return true;
     } catch (error) {
-        console.error('Error updating user balance:', error.message);
+        console.error('Error updating user balance in Firestore:', error);
         return false;
     }
 }
 
-// --- Discord Bot Events ---
-client.once('ready', async () => {
-    console.log(`🤖 Bot logged in as ${client.user.tag} (ID: ${client.user.id})`);
-    console.log(`🌐 Active in ${client.guilds.cache.size} servers`);
 
-    // Register slash commands with better error handling
-    if (commands.length > 0) {
-        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-        try {
-            console.log(`📦 Registering ${commands.length} slash commands...`);
-            console.log('Commands to register:', commands.map(cmd => cmd.name));
-            
-            // Clear existing commands first
-            console.log('🧹 Clearing existing commands...');
-            await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
-            
-            // Wait a moment for Discord to process
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            // Register new commands
-            const data = await rest.put(
-                Routes.applicationCommands(client.user.id),
-                { body: commands }
-            );
-            
-            console.log(`✅ Successfully registered ${data.length} slash commands globally`);
-            console.log('Registered commands:', data.map(cmd => cmd.name));
-            console.log('⏰ Commands may take up to 1 hour to appear globally');
-            
-        } catch (error) {
-            console.error('❌ Failed to register commands:', error);
-            if (error.code === 50001) {
-                console.error('Missing Access - Check bot permissions');
-            } else if (error.code === 10002) {
-                console.error('Unknown Application - Check your bot token');
-            } else {
-                console.error('Full error:', error.rawError || error);
+// --- Discord Bot Events ---
+client.on('ready', async () => {
+    console.log(`🤖 Logged in as ${client.user.tag}`);
+    console.log(`🌐 Bot is active in ${client.guilds.cache.size} servers`);
+
+    // Register slash commands globally
+    const rest = new REST().setToken(process.env.DISCORD_TOKEN);
+    try {
+        console.log(`📦 Registering ${commands.length} slash commands...`);
+        console.log(`Commands to register: ${commands.map(cmd => cmd.name)}`);
+
+        const data = await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: commands },
+        );
+
+        console.log(`✅ Successfully registered ${data.length} slash commands globally`);
+        console.log(`Registered commands: ${data.map(cmd => cmd.name)}`);
+
+        // Optional: Clear guild-specific commands if you intend to only use global commands.
+        console.log('🧹 Clearing existing commands...'); // Changed from 'old guild-specific commands'
+        for (const guild of client.guilds.cache.values()) {
+            try {
+                await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: [] });
+                // console.log(`✅ Cleared guild commands for ${guild.name}`); // This was spammy, removed for cleaner logs
+            } catch (guildError) {
+                console.warn(`⚠️ Could not clear guild commands for ${guild.name}: ${guildError.message}`);
             }
         }
-    } else {
-        console.log('⚠️ No commands to register');
-    }
 
-    // Load Firebase data
-    await loadDiscordRobloxLinks();
-    console.log('🎉 Bot setup complete!');
-    console.log('💡 If commands don\'t appear immediately, wait up to 1 hour for global registration');
+        // Load existing Discord-Roblox links from Firestore after bot setup
+        // This will now correctly check if 'db' is valid internally
+        await loadDiscordRobloxLinks();
+
+        // Final success message
+        console.log('🎉 Bot setup complete!');
+        console.log('💡 If commands don\'t appear immediately, wait up to 1 hour for global registration');
+
+
+    } catch (error) {
+        console.error(`❌ Failed to register global slash commands: ${error}`);
+    }
 });
 
+// 'interactionCreate' event: Fired when a user interacts with the bot
 client.on('interactionCreate', async interaction => {
-    console.log(`📨 Received interaction: ${interaction.type} from ${interaction.user.tag}`);
-    
-    if (!interaction.isChatInputCommand()) {
-        console.log('Not a chat input command, ignoring');
+    if (!interaction.isChatInputCommand()) return; // Only process chat input commands
+
+    const command = client.commands.get(interaction.commandName);
+
+    if (!command) {
+        console.error(`No command matching ${interaction.commandName} was found.`);
         return;
     }
 
-    console.log(`🔧 Processing command: /${interaction.commandName}`);
-
-    const command = client.commands.get(interaction.commandName);
-    if (!command) {
-        console.error(`❌ No command found for: ${interaction.commandName}`);
-        return await interaction.reply({
-            content: '❌ Command not found!',
-            ephemeral: true
-        });
+    // --- Special handling for commands that require Firebase ---
+    const requiresFirebase = ['register', 'bal', 'pay']; // List commands that need Firebase
+    if (requiresFirebase.includes(interaction.commandName)) {
+        if (!db || typeof db.collection !== 'function') { // More robust check for Firebase availability
+            console.log('Firebase required but not available');
+            return interaction.reply({ content: 'This command requires Firebase, which is not available. Please wait for the bot to fully initialize.', ephemeral: true });
+        }
     }
 
     try {
-        // Handle Firebase-dependent commands
-        if (['register', 'bal', 'pay'].includes(interaction.commandName) && !db) {
-            console.log('Firebase required but not available');
-            return await interaction.reply({ 
-                content: '❌ This command requires Firebase, which is not available.', 
-                ephemeral: true 
-            });
-        }
-
-        // Custom command handling with detailed logging
-        if (interaction.commandName === 'ping') {
-            console.log('Executing ping command');
-            return await interaction.reply({
-                content: 'Pong! 🏓 Bot is working correctly!',
-                ephemeral: false
-            });
-        }
-
+        // Custom handling for 'register', 'bal', 'pay' commands
         if (interaction.commandName === 'register') {
-            console.log('Executing register command');
-            
             const discordId = interaction.user.id;
             const robloxId = interaction.options.getString('roblox_id');
-            
-            console.log(`Linking Discord ${discordId} to Roblox ${robloxId}`);
-            
-            const success = await saveDiscordRobloxLink(discordId, robloxId);
-            if (success) {
-                return await interaction.reply({ 
-                    content: `✅ Successfully linked your Discord account to Roblox ID: ${robloxId}!`, 
-                    ephemeral: true 
-                });
-            } else {
-                return await interaction.reply({ 
-                    content: '❌ Failed to save link. Please try again later.', 
-                    ephemeral: true 
-                });
-            }
+            console.log(`📝 Registering Discord ID: ${discordId} with Roblox ID: ${robloxId}`);
+
+            await saveDiscordRobloxLink(discordId, robloxId);
+            return interaction.reply({ content: `✅ Your Discord account (${interaction.user.tag}) has been linked to Roblox ID: ${robloxId}!`, ephemeral: true });
         }
 
         if (interaction.commandName === 'bal') {
-            console.log('Executing balance command');
-            
             const discordId = interaction.user.id;
             const linkedRobloxId = discordRobloxLinks[discordId];
 
             if (!linkedRobloxId) {
-                return await interaction.reply({ 
-                    content: '❌ Your Discord account is not linked to a Roblox account. Use `/register <roblox_id>` first.', 
-                    ephemeral: true 
-                });
+                return interaction.reply({ content: '❌ Your Discord account is not linked to a Roblox ID. Please use `/register <your_roblox_id>` first.', ephemeral: true });
             }
 
             const balance = await getUserBalance(linkedRobloxId);
-            return await interaction.reply({ 
-                content: `💰 Your balance (Roblox ID: ${linkedRobloxId}): **${balance} coins**`, 
-                ephemeral: true 
-            });
+            return interaction.reply({ content: `💰 Your Roblox balance (ID: ${linkedRobloxId}) is: ${balance} coins.`, ephemeral: true });
         }
 
         if (interaction.commandName === 'pay') {
-            console.log('Executing pay command');
-            
             const senderDiscordId = interaction.user.id;
             const senderRobloxId = discordRobloxLinks[senderDiscordId];
 
             if (!senderRobloxId) {
-                return await interaction.reply({ 
-                    content: '❌ You must register your Roblox account first using `/register <roblox_id>`.', 
-                    ephemeral: true 
-                });
+                return interaction.reply({ content: '❌ You must link your Discord account to a Roblox ID using `/register <your_roblox_id>` before you can send payments.', ephemeral: true });
             }
 
             const receiverUser = interaction.options.getUser('recipient');
@@ -492,149 +425,66 @@ client.on('interactionCreate', async interaction => {
             const amount = interaction.options.getNumber('amount');
 
             if (amount <= 0) {
-                return await interaction.reply({ 
-                    content: '❌ Amount must be a positive number.', 
-                    ephemeral: true 
-                });
+                return interaction.reply({ content: '❌ Amount must be a positive number.', ephemeral: true });
             }
 
             const receiverRobloxId = discordRobloxLinks[receiverDiscordId];
             if (!receiverRobloxId) {
-                return await interaction.reply({ 
-                    content: `❌ ${receiverUser.tag} hasn't linked their Roblox account yet. They need to use \`/register\` first.`, 
-                    ephemeral: true 
-                });
-            }
-
-            if (senderDiscordId === receiverDiscordId) {
-                return await interaction.reply({
-                    content: '❌ You cannot send coins to yourself!',
-                    ephemeral: true
-                });
+                return interaction.reply({ content: `❌ The recipient (${receiverUser.tag}) has not linked their Discord account to a Roblox ID. They need to use \`/register\` first.`, ephemeral: true });
             }
 
             const senderBalance = await getUserBalance(senderRobloxId);
             if (senderBalance < amount) {
-                return await interaction.reply({ 
-                    content: `❌ Insufficient balance! You have **${senderBalance} coins** but tried to send **${amount} coins**.`, 
-                    ephemeral: true 
-                });
+                return interaction.reply({ content: `❌ Insufficient balance! Your current balance is ${senderBalance} coins, but you tried to send ${amount} coins.`, ephemeral: true });
             }
-
-            // Defer reply for potentially long operation
-            await interaction.deferReply();
 
             const senderSuccess = await updateUserBalance(senderRobloxId, -amount);
             const receiverSuccess = await updateUserBalance(receiverRobloxId, amount);
 
             if (senderSuccess && receiverSuccess) {
-                return await interaction.editReply({ 
-                    content: `✅ Successfully sent **${amount} coins** to ${receiverUser.tag}!\nYour new balance: **${senderBalance - amount} coins**`
-                });
+                return interaction.reply({ content: `✅ Successfully paid ${amount} coins to ${receiverUser.tag} (Roblox ID: ${receiverRobloxId}). Your new balance is ${senderBalance - amount} coins.`, ephemeral: false });
             } else {
-                // Attempt to revert on failure
+                console.error('Partial transaction failure detected. Attempting to revert...');
                 if (senderSuccess) await updateUserBalance(senderRobloxId, amount);
                 if (receiverSuccess) await updateUserBalance(receiverRobloxId, -amount);
-                return await interaction.editReply({ 
-                    content: '❌ Payment failed due to a database error. Please try again later.'
-                });
+                return interaction.reply({ content: '❌ Failed to complete the payment due to an error. Please try again later.', ephemeral: true });
             }
         }
 
-        // Execute other commands
-        console.log(`Executing command via command.execute(): ${interaction.commandName}`);
+        // For commands that don't require special Firebase handling in this block (e.g., 'ping')
         await command.execute(interaction);
-        
     } catch (error) {
-        console.error(`❌ Command execution error for /${interaction.commandName}:`, error);
-        
-        const errorMessage = `❌ There was an error executing the \`/${interaction.commandName}\` command!\n\`\`\`${error.message}\`\`\``;
-        
-        try {
-            if (interaction.deferred) {
-                await interaction.editReply({ content: errorMessage });
-            } else if (interaction.replied) {
-                await interaction.followUp({ content: errorMessage, ephemeral: true });
-            } else {
-                await interaction.reply({ content: errorMessage, ephemeral: true });
-            }
-        } catch (replyError) {
-            console.error('Failed to send error message:', replyError);
+        console.error('[COMMAND EXECUTION ERROR]:', error);
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+        } else {
+            await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
         }
     }
 });
 
-// Error handling
-client.on('error', error => {
-    console.error('Discord client error:', error.message);
-});
-
-process.on('unhandledRejection', error => {
-    console.error('Unhandled promise rejection:', error.message);
-});
-
-// --- Web Server Setup ---
+// --- Web Server Setup for Health Checks ---
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 app.get('/', (req, res) => {
-    res.status(200).json({
-        status: 'Bot is running!',
-        botOnline: client.isReady(),
-        firebaseConnected: !!db,
-        timestamp: new Date().toISOString()
-    });
-});
-
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        bot: client.isReady() ? 'online' : 'offline',
-        firebase: db ? 'connected' : 'disconnected',
-        uptime: process.uptime()
-    });
+    res.status(200).send('Bot is running!');
 });
 
 app.listen(PORT, () => {
     console.log(`🌐 Web server running on port ${PORT}`);
 });
 
-// --- Initialization ---
-async function startBot() {
-    console.log('🚀 Starting bot initialization...');
-    
-    // Check environment variables
-    if (!process.env.DISCORD_TOKEN) {
-        console.error('❌ DISCORD_TOKEN not found in environment variables!');
-        console.log('Make sure you have a .env file with DISCORD_TOKEN=your_token_here');
-        process.exit(1);
-    }
-
-    console.log(`🔍 Discord token length: ${process.env.DISCORD_TOKEN.length}`);
-    console.log(`🔍 Node.js version: ${process.version}`);
-    
-    // Initialize Firebase (non-blocking)
-    await initializeFirebaseAdminSDK();
-    
-    // Load commands
-    await loadCommands();
-    
-    // Login to Discord
-    try {
-        console.log('🔑 Logging in to Discord...');
-        await client.login(process.env.DISCORD_TOKEN);
-    } catch (error) {
-        console.error('❌ Discord login failed:', error.message);
-        console.log('Common causes:');
-        console.log('1. Invalid token');
-        console.log('2. Token expired');
-        console.log('3. Bot deleted from Discord Developer Portal');
-        console.log('4. Network connectivity issues');
-        process.exit(1);
-    }
+// --- Bot Login ---
+console.log(`🔍 DISCORD_TOKEN exists: ${!!process.env.DISCORD_TOKEN}`);
+if (process.env.DISCORD_TOKEN) {
+    console.log(`🔍 TOKEN length: ${process.env.DISCORD_TOKEN.length}`);
 }
-
-// Start the bot
-startBot().catch(error => {
-    console.error('❌ Failed to start bot:', error.message);
-    process.exit(1);
-});
+console.log(`🔍 Node.js version: ${process.version}`);
+console.log(`🔍 Working directory: ${process.cwd()}`);
+console.log('🚀 Attempting to login to Discord...');
+client.login(process.env.DISCORD_TOKEN)
+    .catch(error => {
+        console.error('❌ Discord login failed:', error);
+        process.exit(1); // Exit if Discord login fails
+    });
