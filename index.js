@@ -1,10 +1,7 @@
 import { Client, GatewayIntentBits, Collection, REST, Routes } from 'discord.js';
 import { createRequire } from 'module'; // Corrected typo: removed extra '='
 import express from 'express';
-import * as admin from 'firebase-admin'; // This imports the entire firebase-admin library
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } = (error) => {
+import * => {
         console.error('Error getting user balance from Firestore:', error);
         return 0;
     }
